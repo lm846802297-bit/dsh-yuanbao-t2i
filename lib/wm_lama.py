@@ -64,18 +64,30 @@ def build_tight_mask(img, roi, thr, sat, dilate):
         dark = ((lum < p_lo + 12) & lowsat).astype(np.uint8) * 255
         nb, nd = int((bright > 0).sum()), int((dark > 0).sum())
         total = sub.shape[0] * sub.shape[1]
-        # 两端都糊掉大半 ⇒ ROI 里没有可分离的字形，别硬修
-        if nb > 0.6 * total and nd > 0.6 * total:
-            return build_rect_mask(w, h, roi), (
-                f"两端检出面积均超 ROI 60%（亮 {nb / total:.0%} / 暗 {nd / total:.0%}），"
-                "ROI 内无可分离字形，回退 rect"
-            )
         if nd == 0 and nb == 0:
             return build_rect_mask(w, h, roi), "自适应两端均未检出字形，回退 rect"
-        if nd < nb:
-            glyph, note = dark, f"暗笔画 p0.5+12={p_lo + 12:.0f} 命中 {nd / total:.1%}（亮端 {nb / total:.1%}）"
+        # ⚠️ 0 命中 ≠ 「这一端更好」：0 命中说明该端「不可用」，而不是「更干净」。
+        #    真机回归抓到过：彩色图上暗端命中 0、亮端命中 3.18%，旧逻辑盲选 0 命中那端
+        #    ⇒ 掩膜为空 ⇒ 退回 rect ⇒ 整块 ROI 被重绘（实测 ROI 96% 像素被改）。
+        #    所以只有两端都 >0 时才比大小；某一端为 0 时直接用另一端。
+        if nd == 0:
+            glyph, side, nsel = bright, "亮", nb
+            note = f"亮笔画 p99.5-12={p_hi - 12:.0f} 命中 {nb / total:.1%}（暗端未检出）"
+        elif nb == 0:
+            glyph, side, nsel = dark, "暗", nd
+            note = f"暗笔画 p0.5+12={p_lo + 12:.0f} 命中 {nd / total:.1%}（亮端未检出）"
+        elif nd < nb:
+            glyph, side, nsel = dark, "暗", nd
+            note = f"暗笔画 p0.5+12={p_lo + 12:.0f} 命中 {nd / total:.1%}（亮端 {nb / total:.1%}）"
         else:
-            glyph, note = bright, f"亮笔画 p99.5-12={p_hi - 12:.0f} 命中 {nb / total:.1%}（暗端 {nd / total:.1%}）"
+            glyph, side, nsel = bright, "亮", nb
+            note = f"亮笔画 p99.5-12={p_hi - 12:.0f} 命中 {nb / total:.1%}（暗端 {nd / total:.1%}）"
+        # 选中的这一端自己超 ROI 60% ⇒ 掩膜已经糊住大半背景，别硬修
+        if nsel > 0.6 * total:
+            return build_rect_mask(w, h, roi), (
+                f"{side}笔画检出面积 {nsel / total:.0%} 超 ROI 60%"
+                "（疑似白底/亮背景误遮），回退 rect"
+            )
     else:
         glyph = ((mx > thr) & lowsat).astype(np.uint8) * 255
         if glyph.sum() == 0:
