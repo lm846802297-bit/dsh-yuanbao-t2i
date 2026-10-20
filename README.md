@@ -316,7 +316,7 @@ IOPaint 的另两个主流模型都试通了，但都不比 `lama + tight` 好�
 
 ## 持续集成（CI）
 
-仓库带一套**不联网、不启浏览器**的静态检查，`push` / PR 自动跑（`.github/workflows/ci.yml`，ubuntu + windows × node 20 / 22）：
+仓库带一套**不联网、不启浏览器**的静态检查，`push` / PR 自动跑（`.github/workflows/ci.yml`，ubuntu + windows × node 22 / 24）：
 
 | 脚本 | 管什么 |
 | --- | --- |
