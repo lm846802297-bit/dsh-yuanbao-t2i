@@ -13,7 +13,6 @@ window.__ModuleLoader__.load({
 
     var TEXT = {
       zh: {
-        summary: "输出目录、是否自动去水印、用哪个引擎。",
         title: "生成设置",
         watermark: "生成后自动去水印",
         watermarkHint:
@@ -21,13 +20,11 @@ window.__ModuleLoader__.load({
         outDir: "输出目录",
         outDirHint: "留空＝默认目录（~/.dsh/yuanbao-t2i-out）。填绝对路径则图片和 clean/ 子目录都落在那里。",
         outDirPlaceholder: "例如 D:/CG/元宝生图",
-        engine: "去水印引擎",
         lama: "Big-LaMa 深度模型（默认，质量好，慢）",
-        telea: "OpenCV 修复（快，痕迹明显）",
         mask: "修复范围",
         maskTight: "只修字形（默认，痕轻）",
         maskRect: "整块矩形（稳，但会糊一片）",
-        note: "此设置为默认值；单次调用仍可用参数 outDir / removeWatermark / wmEngine / wmMask 临时覆盖。",
+        note: "此设置为默认值；单次调用仍可用参数 outDir / removeWatermark / wmMask 临时覆盖。",
         save: "保存",
         saving: "保存中…",
         saved: "已保存",
@@ -37,7 +34,6 @@ window.__ModuleLoader__.load({
         file: "配置文件",
       },
       en: {
-        summary: "Output directory, watermark removal, and which engine.",
         title: "Generation settings",
         watermark: "Remove watermark after generation",
         watermarkHint:
@@ -45,13 +41,11 @@ window.__ModuleLoader__.load({
         outDir: "Output directory",
         outDirHint: "Empty = default (~/.dsh/yuanbao-t2i-out). An absolute path sends both images and the clean/ subfolder there.",
         outDirPlaceholder: "e.g. D:/CG/yuanbao",
-        engine: "Watermark engine",
         lama: "Big-LaMa depth model (default, best quality, slower)",
-        telea: "OpenCV inpaint (fast, visible traces)",
         mask: "Repair area",
         maskTight: "Glyph-only (default, lighter traces)",
         maskRect: "Whole rectangle (safe, but smears)",
-        note: "These are defaults; a single call can still override them with outDir / removeWatermark / wmEngine / wmMask.",
+        note: "These are defaults; a single call can still override them with outDir / removeWatermark / wmMask.",
         save: "Save",
         saving: "saving…",
         saved: "saved",
@@ -131,7 +125,7 @@ window.__ModuleLoader__.load({
               if (!res.ok) throw new Error(res.body && res.body.error);
               var next = {
                 removeWatermark: res.body.removeWatermark === true,
-                wmEngine: res.body.wmEngine === "telea" ? "telea" : "lama",
+                wmEngine: "lama",
                 wmMask: res.body.wmMask === "rect" ? "rect" : "tight",
                 outDir: typeof res.body.outDir === "string" ? res.body.outDir : "",
               };
@@ -168,7 +162,7 @@ window.__ModuleLoader__.load({
               if (!res.ok) throw new Error(res.body && res.body.error);
               var next = {
                 removeWatermark: res.body.removeWatermark === true,
-                wmEngine: res.body.wmEngine === "telea" ? "telea" : "lama",
+                wmEngine: "lama",
                 wmMask: res.body.wmMask === "rect" ? "rect" : "tight",
                 outDir: typeof res.body.outDir === "string" ? res.body.outDir : "",
               };
@@ -231,40 +225,12 @@ window.__ModuleLoader__.load({
           h(
             "label",
             { style: { display: "flex", flexDirection: "column", gap: 6 } },
-            h("span", { style: { fontSize: 13 } }, t.engine),
-            h(
-              "select",
-              {
-                value: draft.wmEngine,
-                disabled: !loaded || busy || !draft.removeWatermark,
-                onChange: (e) => {
-                  var engine = e.target.value === "telea" ? "telea" : "lama";
-                  draftState[1](Object.assign({}, draft, { wmEngine: engine }));
-                },
-                style: {
-                  font: "inherit",
-                  fontSize: 13,
-                  padding: "6px 8px",
-                  borderRadius: 8,
-                  border: "1px solid var(--dsw-alias-border-l2, rgba(127,127,127,0.28))",
-                  background: "var(--dsw-alias-bg-l2, rgba(127,127,127,0.08))",
-                  color: "var(--dsw-alias-label-primary, inherit)",
-                  maxWidth: 420,
-                },
-              },
-              h("option", { value: "lama" }, t.lama),
-              h("option", { value: "telea" }, t.telea),
-            ),
-          ),
-          h(
-            "label",
-            { style: { display: "flex", flexDirection: "column", gap: 6 } },
             h("span", { style: { fontSize: 13 } }, t.mask),
             h(
               "select",
               {
                 value: draft.wmMask,
-                disabled: !loaded || busy || !draft.removeWatermark || draft.wmEngine !== "lama",
+                disabled: !loaded || busy || !draft.removeWatermark,
                 onChange: (e) => {
                   var wmMask = e.target.value === "rect" ? "rect" : "tight";
                   draftState[1](Object.assign({}, draft, { wmMask: wmMask }));
