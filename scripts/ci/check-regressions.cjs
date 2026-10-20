@@ -148,5 +148,21 @@ checker.check("catch 分支里给 watermarkError 赋值，且返回值带上它"
   assert.ok(/return\s*\{[^}]*watermarkError\s*\}/.test(src), "watermarkError 没有被返回给调用方");
 });
 
+checker.step("⑦ 禁止再引入永久无效的 seed 参数");
+checker.check("工具入参/出参 schema 与生成器里都没有 seed（协议层无落点）", () => {
+  // v0.9.0 删掉了 seed：元宝 extra.image_gen_param 结构上只有 model/ratio/resolution 三个键，
+  // seed 从来没起过作用，只是把值原样回显。留着的唯一后果＝让调用方以为能锁种子。
+  const problems = [];
+  for (const rel of ["lib/plugin.js", "lib/generate.js"]) {
+    const src = read(rel);
+    src.split("\n").forEach((line, i) => {
+      if (/\bseed\b/i.test(line) && !/^\s*(\/\/|\*)/.test(line)) {
+        problems.push(`${rel}:${i + 1} ${line.trim()}`);
+      }
+    });
+  }
+  assert.equal(problems.length, 0, `又出现了 seed（永久不生效，⛔ 别再加回来）：\n${problems.join("\n")}`);
+});
+
 console.log(`${C.dim("扫描文件：")}${SCAN_JS.join(", ")}`);
 process.exit(checker.finish());

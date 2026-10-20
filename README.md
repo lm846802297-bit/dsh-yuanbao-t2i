@@ -4,7 +4,9 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![CI](https://github.com/lm846802297-bit/dsh-yuanbao-t2i/actions/workflows/ci.yml/badge.svg)](https://github.com/lm846802297-bit/dsh-yuanbao-t2i/actions/workflows/ci.yml)
 
-> 当前版本 **v0.8.2**（**给插件补上 CI 与「历史回归锁」**：6 条曾经真机踩过、而语法检查/lint 抓不到的**静默失效**现在会在提交前变红；另修 `package-lock.json` 版本漂移）
+> 当前版本 **v0.9.0**（⚡ **破坏性变更**：移除 `seed` 参数——元宝协议层没有 seed 落点，留着只会让人以为能复现；另修 `package-lock.json` 版本漂移）
+
+> ⚡ **v0.9.0 破坏性变更：`seed` 参数已移除**。它本来就**没有任何作用**（只是把值原样回显），但如果你在脚本/提示里传了 `seed`，升级后会被**参数校验拒绝**（报未知参数）。**处理方式：把 `seed` 从调用里删掉即可**，其余参数与行为完全不变。
 
 > 🚨 **如果你装的是 v0.8.0 或更早，请升级到 v0.8.1**：v0.8.0 及更早版本里，工具入口调用去水印时漏传了日志回调，去水印会**静默失败**——调用返回 `ok: true`，但拿到的仍是**带水印的原图**（宿主日志里只有一行 `去水印失败（保留原图继续）：log is not a function`）。v0.8.1 已修好，并新增返回字段 `watermarkError`：一旦去水印没生效，会在返回值与界面提示里**明说**，不再假装成功。
 
@@ -102,6 +104,7 @@ npm install
 
 然后在 DSH 里**重载插件**（Settings → Plugins 里把本插件关掉再打开，或重启 DSH Desktop）即可生效 —— profile 的 `node_modules/dsh-yuanbao-t2i` 是指向 `vendor/yuanbao-t2i` 的链接/junction，代码改动即时可见，只有**依赖变化**才需要重跑 `npm install`。
 
+> ⚡ **v0.9.0 用户必读**：`seed` 参数已删除（协议层无落点，见「已知限制」）。调用里带 `seed` 会报未知参数，删掉即可。
 > 🚨 **v0.6.0 用户必读**：v0.6.0 的取图有回归（`bodyText.split("\\n")` 写成了字面反斜杠），**SSE 解析恒为 0 张** —— 调用「成功」但一张图都拿不到。请升到 **v0.6.2**（v0.6.1 修了取图，v0.6.2 修了上传时弹系统「打开」文件框不关闭）。
 > 🚨 **v0.5.0 及更早**：已下架 `telea` 引擎（只保留 `lama`），配置文件里的 `wmEngine: "telea"` 会被**静默**改写成 `lama`（不报错），请知悉。
 
@@ -131,13 +134,12 @@ npm install
 | `imageRatio` | `智能比例` \| `1:1` \| `4:3` \| `3:4` \| `16:9` \| `9:16` \| `ref:1` | 输出图片比例（可选，默认 `16:9`）。✅ **真生效**（v0.7.0 起）：插件会切到元宝「AI 生图」模式并点选比例控件，协议落点＝请求体 `extra.image_gen_param.ratio`。实测 `16:9` → 出图 **1680×928**（1.5K）/ **2240×1248**（2K）；`3:4` → **1088×1440**（1.5K）。`智能比例`＝服务端自动挑；`ref:1` 是「智能比例」的旧别名（跟随参考图） |
 | `imageResolution` | `1.5K` \| `2K` | 输出分辨率（可选）。✅ **真生效**：协议落点 `extra.image_gen_param.resolution`。不传＝用元宝当前默认（实测账号默认 2K） |
 | `imageModel` | `Hy Image3.5 preview` | 生图模型（可选）。✅ **真生效**：协议落点 `extra.image_gen_param.model`。当前元宝只提供这一个模型 |
-| `seed` | number | 随机种子（可选）。⛔ **永久不生效**：2026-10-21 全量扫描（98 个前端 bundle + 全部请求体）证实元宝协议层**没有 seed 落点**（`extra.image_gen_param` 结构上只有 `model`/`ratio`/`resolution` 三个键），本参数仅回显 |
 | `outDir` | string | 保存目录；不传＝用插件界面的「输出目录」，界面留空则用默认 `~/.dsh/yuanbao-t2i-out` |
 | `removeWatermark` | boolean | 是否去水印；不传＝用插件界面开关。开启后产物写 `<outDir>/clean/`，原图保留 |
 | `wmEngine` | `lama` | 去水印引擎（仅去水印时生效）；当前只接受 `lama`（其余引擎均已实测下架） |
 | `wmMask` | `tight` \| `rect` | 修复范围（仅 `lama` 引擎）；不传＝用插件界面设置（默认 `tight`） |
 
-返回：图片绝对路径列表 + 原始（未去水印）路径 + 使用的参数（`refImages`/`dstIntent`/`imageRatio`/`imageResolution`/`imageModel`/`seed`/`style`）+ `watermarkError`（**仅当去水印没成功时非空**，此时 `files` 里是带水印的原图）。
+返回：图片绝对路径列表 + 原始（未去水印）路径 + 使用的参数（`refImages`/`dstIntent`/`imageRatio`/`imageResolution`/`imageModel`/`style`）+ `watermarkError`（**仅当去水印没成功时非空**，此时 `files` 里是带水印的原图）。
 
 > ⚠️ **v0.8.0 及更早：去水印在工具链路上静默失败**。返回的 `files` 可能是带水印的原图，`rawFiles` 与 `files` 完全相同即为该症状。v0.8.1 起会写明 `watermarkError` 并在界面提示里显示。
 
@@ -300,7 +302,7 @@ IOPaint 的另两个主流模型都试通了，但都不比 `lama + tight` 好�
 ## 已知限制
 
 - 文生图一次固定 4 张图，尺寸由 `imageRatio`/`imageResolution` 决定（实测 16:9+1.5K → 1680×928、16:9+2K → 2240×1248、3:4+1.5K → 1088×1440；不指定则由元宝服务端决定），单张 3MB 左右；**图生图实测只返回 1 张**。
-- **`seed` 永久不可用**：2026-10-21 全量扫描（98 个前端 bundle + 全部请求体 + SSE）证实元宝协议层没有 seed 落点，`extra.image_gen_param` 结构上只有 `model`/`ratio`/`resolution` 三个键 ⇒ 同一提示词**不可复现**，本插件不再假装支持（参数仅回显）。
+- **同一提示词不可复现（`seed` 已移除）**：2026-10-21 全量扫描（98 个前端 bundle + 全部请求体 + SSE）证实元宝协议层没有 seed 落点，`extra.image_gen_param` 结构上只有 `model`/`ratio`/`resolution` 三个键。既然做不到，v0.9.0 干脆把 `seed` 参数**删掉**——与其留一个只回显、永不起作用的参数让人误以为能锁种子，不如让「不能复现」这件事在调用时就看得见。
 - **比例/分辨率依赖「AI 生图」模式存在**：若元宝改版或该账号没有这个模式，插件会退化为「不设比例」（日志会写「未指定比例/分辨率/模型 → 走默认对话生图路径」），不会崩。
 - 水印 ROI 按 2026-10 的版面量得（默认 `x 0.710–0.992, y 0.878–0.996`，只包住文字本体）；元宝改版面后需重新量，或用环境变量 `DSH_WM_ROI` 覆盖。
 - `tight` 掩膜默认走自适应阈值（亮/暗笔画二选一），但**极端画面仍可能失效**：水印与背景亮度差小于 3 个灰度级时无法分离；**选中的那一端**命中面积超 ROI 60% 时自动降级 `rect`（重修面积变大）。可用 `wmMask: "rect"` 强制整块重绘，或调 `DSH_WM_ROI`。
@@ -324,7 +326,7 @@ IOPaint 的另两个主流模型都试通了，但都不比 `lama + tight` 好�
 | `probe-tools.cjs` | 工具注册探针：两个工具注册成功、参数 schema 合法、handler 可解析 |
 | `probe-routes.cjs` | 路由探针：设置读写重定向到临时目录（⛔ 不碰真实配置）、工具/路由挂载正确 |
 | `check-package.cjs` | 打包完整性：`files` / `exports` / `main` / `dsh.bundle.patch` 都真实存在；`package-lock.json` 版本必须与 `package.json` 一致 |
-| `check-regressions.cjs` | 历史回归锁：6 条**曾经真机踩过、而语法检查抓不到**的静默失效 |
+| `check-regressions.cjs` | 历史回归锁：7 条**曾经真机踩过、而语法检查抓不到**的静默失效 |
 
 本地一条命令跑全：
 
@@ -341,7 +343,8 @@ for f in check-syntax probe-tools probe-routes check-package check-regressions; 
 3. **禁止字面反斜杠分割**（源码里写成 `split("\\n")` 那种）—— v0.6.0 因此把整段 SSE 当一行，取图恒为 0 张；
 4. **禁止空 `catch {}`** —— 静默失败温床；
 5. **禁止再依赖 `window.__YUANBAO_PENDING_IMAGES__` 注入** —— v0.6.1 抓包已证伪（请求体 `multimedia` 为空）；
-6. 去水印失败**必须在 `catch` 里写 `watermarkError` 并返回给调用方** —— 否则调用方拿不到任何信号。
+6. 去水印失败**必须在 `catch` 里写 `watermarkError` 并返回给调用方** —— 否则调用方拿不到任何信号；
+7. **禁止再引入 `seed` 参数** —— 元宝 `extra.image_gen_param` 只有 `model` / `ratio` / `resolution` 三个键，seed 永远不生效；留着只会让调用方误以为能锁种子（v0.9.0 已删）。
 
 > 每个检查器都做过**阳性对照**：把对应 bug 注入一份仓库副本，确认它会变红。不做这步，恒绿的检查器等于没有。
 
