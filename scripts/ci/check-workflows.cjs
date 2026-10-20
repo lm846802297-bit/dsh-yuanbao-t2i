@@ -197,6 +197,59 @@ if (ciRaw && selfRaw && notifyRaw) {
   }
 }
 
+// ── A3/A4. 全目录级：防「未来新加的 workflow 又长出故意失败开关」─────────────
+// 只在 ci.yml 上钉 A/A2 是不够的：下一个 workflow（比如将来加个 nightly.yml）照样能
+// 挂 workflow_dispatch inputs 造红 run。所以把禁令提到**目录级**，只给 self-test.yml 豁免
+// （它必须有开关，否则「自测通知链路」永远验不出东西）。
+const FAIL_SWITCH_EXEMPT = "self-test.yml";
+{
+  const all = fs.existsSync(WF_DIR)
+    ? fs.readdirSync(WF_DIR).filter((n) => /\.ya?ml$/.test(n)).sort()
+    : [];
+  const scanned = all.filter((n) => n !== FAIL_SWITCH_EXEMPT);
+  const withInputs = [];
+  const withForcedFail = [];
+
+  for (const name of scanned) {
+    const raw = read(name);
+    if (!raw) continue;
+    const lines = raw.split("\n");
+
+    // (1) workflow_dispatch 不许带 inputs
+    for (let i = 0; i < lines.length; i++) {
+      if (isComment(lines[i])) continue;
+      const m = /^(\s*)workflow_dispatch:\s*(#.*)?$/.exec(lines[i]);
+      if (!m) continue;
+      const blk = childBlock(lines, { idx: i, indent: m[1].length });
+      if (blk.some((ln) => !isComment(ln) && /^\s*inputs:\s*$/.test(ln))) {
+        withInputs.push(`${name}:${i + 1}`);
+      }
+    }
+
+    // (2) 不许有「故意失败」步骤：exit <非零>
+    lines.forEach((ln, i) => {
+      if (isComment(ln)) return;
+      if (/\bexit\s+[1-9]\d*\b/.test(ln)) withForcedFail.push(`${name}:${i + 1}`);
+    });
+  }
+
+  if (scanned.length === 0) {
+    bad("A3. workflows 目录里除 self-test.yml 外没有别的 workflow（扫描面为空，闸形同虚设）");
+  } else if (withInputs.length === 0) {
+    ok(`A3. 除 ${FAIL_SWITCH_EXEMPT} 外 ${scanned.length} 个 workflow 的 workflow_dispatch 都无 inputs`);
+  } else {
+    bad("A3. 有 workflow 的 workflow_dispatch 挂了 inputs ⇒ 又长了「故意失败」通道",
+        `${withInputs.join("；")}（豁免只给 ${FAIL_SWITCH_EXEMPT}）`);
+  }
+
+  if (withForcedFail.length === 0) {
+    ok(`A4. 除 ${FAIL_SWITCH_EXEMPT} 外 ${scanned.length} 个 workflow 无「故意失败」步骤（exit 非零）`);
+  } else {
+    bad("A4. 有 workflow 含故意失败步骤 ⇒ 会让主门禁历史留红 run",
+        `${withForcedFail.join("；")}（要演练请放进 ${FAIL_SWITCH_EXEMPT}）`);
+  }
+}
+
 console.log("");
 if (fails.length) {
   for (const f of fails) console.log(`  ❌ ${f}`);

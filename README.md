@@ -325,7 +325,7 @@ IOPaint 的另两个主流模型都试通了，但都不比 `lama + tight` 好�
 | `check-syntax.cjs` | 全部 JS 过 `node --check`；去水印的 py 过 `py_compile` |
 | `probe-tools.cjs` | 工具注册探针：两个工具注册成功、参数 schema 合法、handler 可解析 |
 | `probe-routes.cjs` | 路由探针：设置读写重定向到临时目录（⛔ 不碰真实配置）、工具/路由挂载正确 |
-| `check-workflows.cjs` | workflow 结构闸：主 CI ⛔ 不许有「故意失败」开关、通知逻辑只允许一份实现、可复用 workflow ⛔ 不许被 push/PR 触发 |
+| `check-workflows.cjs` | workflow 结构闸（9 条断言）：主 CI ⛔ 不许有「故意失败」开关、通知逻辑只允许一份实现、可复用 workflow ⛔ 不许被 push/PR 触发；**并且扫全部 workflow**——除 `self-test.yml`（唯一豁免）外，任何 workflow 的 `workflow_dispatch` 都不许带 `inputs`、不许有 `exit 非零` 的故意失败步骤（防「以后新加的 workflow 又把开关长回来」） |
 | `check-package.cjs` | 打包完整性：`files` / `exports` / `main` / `dsh.bundle.patch` 都真实存在；`package-lock.json` 版本必须与 `package.json` 一致 |
 | `check-regressions.cjs` | 历史回归锁：7 条**曾经真机踩过、而语法检查抓不到**的静默失效 |
 
