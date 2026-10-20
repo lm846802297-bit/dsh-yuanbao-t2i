@@ -140,6 +140,11 @@ def main():
             mask = build_rect_mask(w, h, roi)
 
         bbox = mask.getbbox()
+        if a.mask == "tight" and not bbox:
+            # 理论上 build_tight_mask 不会返回空掩膜（空则已回退 rect），但真出现时空转整图会把
+            # 整张图交给 LaMa 重绘（等于变相糊整图）⇒ 退化成 rect 掩膜走下面的整块路径更稳。
+            print(f"[wm_lama] {name}: tight 掩膜为空，回退 rect", flush=True)
+            mask = build_rect_mask(w, h, roi)
         if a.mask == "tight" and bbox:
             # tight：只把「掩膜 + 上下文」这一块送模型，回填时按羽化掩膜混合，避免整图重建
             # ctx 默认 64（历史值 160 实测过大：裁切块比 ROI 自身还大 3-5 倍，见模块 docstring）
