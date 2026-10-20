@@ -2,8 +2,9 @@
 
 [![Release](https://img.shields.io/github/v/release/lm846802297-bit/dsh-yuanbao-t2i?label=release&color=blue)](https://github.com/lm846802297-bit/dsh-yuanbao-t2i/releases/latest)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![CI](https://github.com/lm846802297-bit/dsh-yuanbao-t2i/actions/workflows/ci.yml/badge.svg)](https://github.com/lm846802297-bit/dsh-yuanbao-t2i/actions/workflows/ci.yml)
 
-> 当前版本 **v0.8.1**（修复**去水印在工具链路上静默失败**的实装 bug + 修复 `tight` 自适应掩膜「盲选空端」缺陷）
+> 当前版本 **v0.8.2**（**给插件补上 CI 与「历史回归锁」**：6 条曾经真机踩过、而语法检查/lint 抓不到的**静默失效**现在会在提交前变红；另修 `package-lock.json` 版本漂移）
 
 > 🚨 **如果你装的是 v0.8.0 或更早，请升级到 v0.8.1**：v0.8.0 及更早版本里，工具入口调用去水印时漏传了日志回调，去水印会**静默失败**——调用返回 `ok: true`，但拿到的仍是**带水印的原图**（宿主日志里只有一行 `去水印失败（保留原图继续）：log is not a function`）。v0.8.1 已修好，并新增返回字段 `watermarkError`：一旦去水印没生效，会在返回值与界面提示里**明说**，不再假装成功。
 
@@ -312,6 +313,37 @@ IOPaint 的另两个主流模型都试通了，但都不比 `lama + tight` 好�
 - **画风预设只接受 `image2image` 类模板**（v0.8.0）：`text2image` 类（电商海报等成品场景模板）当画风用会和你自己的画面描述打架，插件会直接报错并提示换模板。
 - **画风模板库是官方快照**：缓存 `~/.dsh/yuanbao-t2i-templates.json`，一周刷新一次；元宝改版后可能要手动删缓存重拉。首次拉取需要联网（走元宝自己的登录态）。
 - LaMa 修复在白色背景 + 细纸纹图上仍可能留下轻微平滑痕——这也是「默认不去水印」的原因。
+
+## 持续集成（CI）
+
+仓库带一套**不联网、不启浏览器**的静态检查，`push` / PR 自动跑（`.github/workflows/ci.yml`，ubuntu + windows × node 20 / 22）：
+
+| 脚本 | 管什么 |
+| --- | --- |
+| `check-syntax.cjs` | 全部 JS 过 `node --check`；去水印的 py 过 `py_compile` |
+| `probe-tools.cjs` | 工具注册探针：两个工具注册成功、参数 schema 合法、handler 可解析 |
+| `probe-routes.cjs` | 路由探针：设置读写重定向到临时目录（⛔ 不碰真实配置）、工具/路由挂载正确 |
+| `check-package.cjs` | 打包完整性：`files` / `exports` / `main` / `dsh.bundle.patch` 都真实存在；`package-lock.json` 版本必须与 `package.json` 一致 |
+| `check-regressions.cjs` | 历史回归锁：6 条**曾经真机踩过、而语法检查抓不到**的静默失效 |
+
+本地一条命令跑全：
+
+```bash
+for f in check-syntax probe-tools probe-routes check-package check-regressions; do node scripts/ci/$f.cjs || break; done
+```
+
+### 历史回归锁锁的是什么
+
+每一条都对应一次真实事故，且都是「语法合法、运行不报错，只是静默做错事」：
+
+1. `cleanWatermark(...)` 调用点**必须显式传 `log`** —— v0.8.0 漏传 ⇒ 去水印静默失败、仍返回 `ok: true` + 带水印原图；
+2. `cleanWatermark` 签名里 `log` **必须有缺省值** —— 内部裸调用不再致命；
+3. **禁止字面反斜杠分割**（源码里写成 `split("\\n")` 那种）—— v0.6.0 因此把整段 SSE 当一行，取图恒为 0 张；
+4. **禁止空 `catch {}`** —— 静默失败温床；
+5. **禁止再依赖 `window.__YUANBAO_PENDING_IMAGES__` 注入** —— v0.6.1 抓包已证伪（请求体 `multimedia` 为空）；
+6. 去水印失败**必须在 `catch` 里写 `watermarkError` 并返回给调用方** —— 否则调用方拿不到任何信号。
+
+> 每个检查器都做过**阳性对照**：把对应 bug 注入一份仓库副本，确认它会变红。不做这步，恒绿的检查器等于没有。
 
 ## License
 
