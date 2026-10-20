@@ -12,6 +12,11 @@ on:
     - cron: '0 3 * * 1'
   # 手动触发：Actions 页右上角「Run workflow」，用来验证定时那条链路是否还通
   workflow_dispatch:
+    inputs:
+      force_fail:
+        description: '自测失败通知：故意让检查失败（仅用于验证 issue 通知链路，验完就关）'
+        type: boolean
+        default: false
 
 # 只读权限，不碰仓库内容
 permissions:
@@ -68,9 +73,58 @@ jobs:
       - name: Route probe
         run: node scripts/ci/probe-routes.cjs
 
-      # 历史回归锁：6 条曾经真机踩过、而 lint/语法检查抓不到的静默失效
+      # 历史回归锁：7 条曾经真机踩过、而 lint/语法检查抓不到的静默失效
       - name: Regression locks (历史回归锁)
         run: node scripts/ci/check-regressions.cjs
 
       - name: Package integrity check
         run: node scripts/ci/check-package.cjs
+
+      # 自测用：workflow_dispatch 且 force_fail=true 时故意失败，用来验证下面的失败通知真的会发
+      - name: Force failure (self-test of failure notification)
+        if: ${{ inputs.force_fail }}
+        run: |
+          echo "::error::force_fail=true —— 故意让本次检查失败，用于验证失败通知链路"
+          exit 1
+
+  # 失败通知：只要 check 挂了就往 issue 里写，GitHub 会按仓库 watch 设置发邮件
+  # （⛔ 不接外部 webhook / 不配 secret：零配置、零密钥，红了必留痕）
+  notify:
+    name: 失败通知
+    needs: [check]
+    if: failure()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: 开/更新一张 CI 失败 issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          EVENT: ${{ github.event_name }}
+          BRANCH: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          TITLE="CI 失败 · ${EVENT}"
+          BODY="$(printf '%s\n' \
+            "**触发方式**：\`${EVENT}\`" \
+            "**分支**：\`${BRANCH}\`" \
+            "**提交**：\`${SHA}\`" \
+            "**运行**：${RUN_URL}" \
+            "" \
+            "矩阵（ubuntu/windows × node 22/24）里至少一个 job 红了。点上面的运行链接看是哪一格、哪个 step。" \
+            "" \
+            "> 这张 issue 由 CI 自动开；同一标题的已开 issue 会被复用（在下面追加评论），不会刷屏。" \
+            "> 修好后 CI 转绿，请手动关闭本 issue。")"
+          EXISTING="$(gh issue list --repo "$REPO" --state open --search "$TITLE in:title" --limit 1 --json number --jq '.[0].number // ""')"
+          if [ -n "$EXISTING" ]; then
+            echo "复用已开 issue #$EXISTING"
+            gh issue comment "$EXISTING" --repo "$REPO" --body "$BODY"
+          else
+            echo "新开 issue"
+            gh issue create --repo "$REPO" --title "$TITLE" --body "$BODY"
+          fi
