@@ -5,11 +5,15 @@
 
 > 当前版本 **v0.6.2**（修复图生图上传时弹出 Windows 系统「打开」文件框且不关闭的问题：改为先注册 `filechooser` 拦截再点「上传图片」，用 `chooser.setFiles()` 灌文件，不再弹系统框）
 
-[DSH](https://github.com/deepseek-ai)（DeepSeek Harness）本地插件：用**腾讯元宝网页版**（混元 Hy Image）**文生图 / 图生图**，一次 4 张 PNG 直接落盘，并可在插件设置卡里选择图片存到哪个目录（**v0.5.1 起支持点按钮选目录**，不用手敲长路径）、是否去水印、用哪个去水印引擎。
+> 🚨 **如果你装的是 v0.6.0，请直接升级到 v0.6.2**：v0.6.0 有取图回归（`bodyText.split("\\n")` 写成了字面反斜杠），**SSE 解析恒为 0 张**，即「调用成功但一张图都拿不到」。v0.6.1 修好了它，v0.6.2 又修掉了上传时弹系统「打开」文件框不关闭的问题。升级步骤见 <a href="#安装">安装</a> 一节（`git pull && npm install` 后重载插件即可）。
+>
+> 🚨 **如果你装的是 v0.5.0 或更早**：v0.5.0 已下架 `telea` 引擎（只保留 `lama`），配置文件里的 `wmEngine: "telea"` 会被**静默**改写成 `lama`（不报错），请知悉。
+
+[DSH](https://github.com/deepseek-ai)（DeepSeek Harness）本地插件：用**腾讯元宝网页版**（混元 Hy Image）**文生图 / 图生图**，一次 4 张 PNG 直接落盘，并可在插件设置卡里选择图片存到哪个目录（**v0.5.1 起支持点按钮选目录**，不用手敲长路径）、是否去水印、去水印的修复范围（只修字形 / 整块矩形）。
 
 > ⚠️ **性质说明**：本插件通过 [patchright](https://github.com/Kaliiiiiiiiii-Vinyzu/patchright) 驱动真实浏览器登录元宝网页版，复用**你自己账号**的会话。请自行评估账号风险（频繁调用、自动化行为可能触发平台风控），并遵守腾讯元宝的服务条款。作者不对账号受限、图片内容或版权负责。
 
-![去水印效果：左＝元宝原图（右下角水印），右＝开启 removeWatermark 且引擎为 LaMa](docs/watermark-before-after.jpg)
+![去水印效果：左＝元宝原图（右下角水印），右＝开启 removeWatermark（Big-LaMa 修复）](docs/watermark-before-after.jpg)
 
 <sub>上半＝整图对比，下半＝右下角 2× 放大（默认 `tight` 掩膜）。默认**不去水印**；开启后可去掉右下角「元宝 AI生成」，但放大仍能看到轻微平滑／修补痕（纸纹、白底类画面更明显）——所以默认关。同图的 tight vs rect 对比见 <a href="#tight-与-rect-的差别">下节</a>。</sub>
 
@@ -75,6 +79,21 @@
 5. 重启 DSH Desktop（或在 Settings → Plugins 里把本插件关掉再打开）让它加载新的宿主半和浏览器半。
 
 > 💡 **v0.5.1 起新增**：设置卡里「输出目录」旁边多了个**「选择目录…」**按钮，点一下弹 Windows 文件夹选择器，选完自动填进输入框（详见下文「插件界面（设置卡）」）。升级到 v0.5.1 只需 `git pull` + `npm install` + 重载 DSH，老配置文件完全兼容。
+
+### 升级已有安装
+
+已经装过的（仓库就在 `vendor/yuanbao-t2i` 目录下）**直接原地升级**，不需要重新 clone、也不需要重做 junction：
+
+```bash
+cd <你的>/.dsh/profiles/<profile>/vendor/yuanbao-t2i
+git pull
+npm install
+```
+
+然后在 DSH 里**重载插件**（Settings → Plugins 里把本插件关掉再打开，或重启 DSH Desktop）即可生效 —— profile 的 `node_modules/dsh-yuanbao-t2i` 是指向 `vendor/yuanbao-t2i` 的链接/junction，代码改动即时可见，只有**依赖变化**才需要重跑 `npm install`。
+
+> 🚨 **v0.6.0 用户必读**：v0.6.0 的取图有回归（`bodyText.split("\\n")` 写成了字面反斜杠），**SSE 解析恒为 0 张** —— 调用「成功」但一张图都拿不到。请升到 **v0.6.2**（v0.6.1 修了取图，v0.6.2 修了上传时弹系统「打开」文件框不关闭）。
+> 🚨 **v0.5.0 及更早**：已下架 `telea` 引擎（只保留 `lama`），配置文件里的 `wmEngine: "telea"` 会被**静默**改写成 `lama`（不报错），请知悉。
 
 ## 用法
 
