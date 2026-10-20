@@ -14,7 +14,7 @@ window.__ModuleLoader__.load({
     var TEXT = {
       zh: {
         title: "生成设置",
-        summary: "输出目录、是否自动去水印、修复范围。",
+        summary: "输出目录、是否自动去水印。",
         watermark: "生成后自动去水印",
         watermarkHint:
           "开启后每次生成会把图送去水印，产物落在 <输出目录>/clean/ 并保留原图。Big-LaMa 约 3–8 秒/张（GPU）。",
@@ -27,10 +27,7 @@ window.__ModuleLoader__.load({
         browseFailed: "打开系统目录选择器失败",
         browseEmpty: "已取消选择",
         browseUnavailable: "当前宿主不支持目录选择器（请手动输入路径）",
-        mask: "修复范围",
-        maskTight: "只修字形（默认，痕轻）",
-        maskRect: "整块矩形（稳，但会糊一片）",
-        note: "此设置为默认值；单次调用仍可用参数 outDir / removeWatermark / wmMask 临时覆盖。",
+        note: "此设置为默认值；单次调用仍可用参数 outDir / removeWatermark 临时覆盖。",
         save: "保存",
         saving: "保存中…",
         saved: "已保存",
@@ -41,7 +38,7 @@ window.__ModuleLoader__.load({
       },
       en: {
         title: "Generation settings",
-        summary: "Output directory, watermark removal, and repair scope.",
+        summary: "Output directory and watermark removal.",
         watermark: "Remove watermark after generation",
         watermarkHint:
           "When on, every batch is sent through watermark removal; cleaned files land in <outDir>/clean/ and originals are kept. Big-LaMa takes ~3–8 s per image (GPU).",
@@ -54,10 +51,7 @@ window.__ModuleLoader__.load({
         browseFailed: "could not open the system folder picker",
         browseEmpty: "selection cancelled",
         browseUnavailable: "this host has no folder picker (type the path instead)",
-        mask: "Repair area",
-        maskTight: "Glyph-only (default, lighter traces)",
-        maskRect: "Whole rectangle (safe, but smears)",
-        note: "These are defaults; a single call can still override them with outDir / removeWatermark / wmMask.",
+        note: "These are defaults; a single call can still override them with outDir / removeWatermark.",
         save: "Save",
         saving: "saving…",
         saved: "saved",
@@ -117,8 +111,8 @@ window.__ModuleLoader__.load({
           return t.summary;
         }
         var loadedState = react.useState(false);
-        var settingsState = react.useState({ removeWatermark: false, wmEngine: "lama", wmMask: "tight", outDir: "" });
-        var draftState = react.useState({ removeWatermark: false, wmEngine: "lama", wmMask: "tight", outDir: "" });
+        var settingsState = react.useState({ removeWatermark: false, wmEngine: "lama", outDir: "" });
+        var draftState = react.useState({ removeWatermark: false, wmEngine: "lama", outDir: "" });
         var noteState = react.useState("");
         var busyState = react.useState(false);
         var pickingState = react.useState(false);
@@ -140,7 +134,6 @@ window.__ModuleLoader__.load({
               var next = {
                 removeWatermark: res.body.removeWatermark === true,
                 wmEngine: "lama",
-                wmMask: res.body.wmMask === "rect" ? "rect" : "tight",
                 outDir: typeof res.body.outDir === "string" ? res.body.outDir : "",
               };
               settingsState[1](next);
@@ -160,7 +153,6 @@ window.__ModuleLoader__.load({
           loaded &&
           draft.removeWatermark === settings.removeWatermark &&
           draft.wmEngine === settings.wmEngine &&
-          draft.wmMask === settings.wmMask &&
           draft.outDir === settings.outDir;
 
         function save() {
@@ -177,7 +169,6 @@ window.__ModuleLoader__.load({
               var next = {
                 removeWatermark: res.body.removeWatermark === true,
                 wmEngine: "lama",
-                wmMask: res.body.wmMask === "rect" ? "rect" : "tight",
                 outDir: typeof res.body.outDir === "string" ? res.body.outDir : "",
               };
               settingsState[1](next);
@@ -279,34 +270,8 @@ window.__ModuleLoader__.load({
             ),
           ),
           h("div", { style: theme.hint }, t.outDirHint),
-          h(
-            "label",
-            { style: { display: "flex", flexDirection: "column", gap: 6 } },
-            h("span", { style: { fontSize: 13 } }, t.mask),
-            h(
-              "select",
-              {
-                value: draft.wmMask,
-                disabled: !loaded || busy || !draft.removeWatermark,
-                onChange: (e) => {
-                  var wmMask = e.target.value === "rect" ? "rect" : "tight";
-                  draftState[1](Object.assign({}, draft, { wmMask: wmMask }));
-                },
-                style: {
-                  font: "inherit",
-                  fontSize: 13,
-                  padding: "6px 8px",
-                  borderRadius: 8,
-                  border: "1px solid var(--dsw-alias-border-l2, rgba(127,127,127,0.28))",
-                  background: "var(--dsw-alias-bg-l2, rgba(127,127,127,0.08))",
-                  color: "var(--dsw-alias-label-primary, inherit)",
-                  maxWidth: 420,
-                },
-              },
-              h("option", { value: "tight" }, t.maskTight),
-              h("option", { value: "rect" }, t.maskRect),
-            ),
-          ),
+          // ⛔ v0.10.0 起掩膜模式下拉整块已移除：改由 wm_lama.py 内部自适应（auto）；
+          //    兜底只留环境变量 DSH_WM_MASK=tight|rect，不再暴露成界面选项。
           h("div", { style: theme.hint }, t.note),
           h(
             "div",

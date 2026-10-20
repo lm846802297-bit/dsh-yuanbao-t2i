@@ -3,8 +3,9 @@
 // CI · 路由探针（不联网 / 不启动浏览器 / 不碰真实用户配置）
 //
 // 打 lib/route.js 注册的 /yuanbao-t2i/config 路由：
-//   GET    → 200
-//   POST {wmEngine:"telea"} → 200，且落盘后被 sanitize 回落为 "lama"（telea 已下架）
+//   GET    → 200（配置里预置了旧版才有的 wmMask ⇒ 须被**静默忽略**，其余字段照常生效）
+//   POST {wmEngine:"telea", wmMask:"tight"} → 200，且落盘后被 sanitize 回落为 "lama"
+//        （telea 已下架）；已撤下的 wmMask 被丢弃、不回写（v0.10.0 起掩膜改内部自适应）
 //   DELETE → 405
 //
 // ⚠️ lib/settings.js 读写 ~/.dsh/yuanbao-t2i-config.json（源码 lib/settings.js:8-9 读
@@ -131,34 +132,53 @@ async function callRoute(route, method, body) {
     );
   });
 
+  // ── 预置「旧版配置文件」──────────────────────────────────────────────────────
+  // 旧版（≤v0.9.0）的配置里有 wmMask；v0.10.0 起该键已从设置面撤下 ⇒ 必须被**静默忽略**
+  //（不报错、不迁移、不回写），配置里其余字段照常生效。这里先把旧文件写进去再走 GET/POST。
+  const OLD_CONF = { removeWatermark: true, wmEngine: "lama", wmMask: "rect", outDir: "" };
+  checker.check("预置旧版配置（含已撤下的 wmMask）", () => {
+    fs.writeFileSync(SETTINGS_FILE, JSON.stringify(OLD_CONF, null, 2) + "\n", "utf8");
+    const back = JSON.parse(fs.readFileSync(SETTINGS_FILE, "utf8"));
+    assert.equal(back.wmMask, "rect", "预置失败：旧配置里本该有 wmMask");
+  });
+
   // ── GET ────────────────────────────────────────────────────────────────────
   checker.step("GET /yuanbao-t2i/config");
   let getRes;
-  await checker.acheck("GET → 200 且返回默认设置", async () => {
+  await checker.acheck("GET → 200 且旧配置的 wmMask 被静默忽略、其余字段生效", async () => {
     getRes = await callRoute(route, "GET");
     assert.equal(getRes.status, 200, `status = ${getRes.status}, body = ${getRes.body}`);
     assert.ok(getRes.json, `响应不是 JSON：${getRes.body}`);
     assert.equal(getRes.json.wmEngine, "lama");
-    assert.equal(getRes.json.wmMask, "tight");
-    assert.equal(getRes.json.removeWatermark, false);
+    assert.ok(
+      !Object.prototype.hasOwnProperty.call(getRes.json, "wmMask"),
+      `wmMask 已撤下，不该出现在响应里：${JSON.stringify(getRes.json)}`,
+    );
+    assert.equal(getRes.json.removeWatermark, true, "旧配置里的其它字段应照常生效");
     assert.equal(getRes.json.path, SETTINGS_FILE);
   });
 
-  // ── POST（非法引擎须被 sanitize 回落）────────────────────────────────────────
-  checker.step('POST /yuanbao-t2i/config  { wmEngine: "telea" }');
-  await checker.acheck("POST → 200 且 wmEngine 被回落为 lama", async () => {
-    const r = await callRoute(route, "POST", { wmEngine: "telea", wmMask: "rect" });
+  // ── POST（非法引擎须被 sanitize 回落；已撤下的 wmMask 须被丢弃）────────────────
+  checker.step('POST /yuanbao-t2i/config  { wmEngine: "telea", wmMask: "tight" }');
+  await checker.acheck("POST → 200 且 wmEngine 被回落为 lama、wmMask 被丢弃", async () => {
+    const r = await callRoute(route, "POST", { wmEngine: "telea", wmMask: "tight" });
     assert.equal(r.status, 200, `status = ${r.status}, body = ${r.body}`);
     assert.ok(r.json, `响应不是 JSON：${r.body}`);
     assert.equal(r.json.wmEngine, "lama", `回落失败：${JSON.stringify(r.json)}`);
-    assert.equal(r.json.wmMask, "rect", "合法字段 wmMask 应被保留");
+    assert.ok(
+      !Object.prototype.hasOwnProperty.call(r.json, "wmMask"),
+      `已撤下的 wmMask 即便被 POST 上来也必须被丢弃：${JSON.stringify(r.json)}`,
+    );
   });
 
-  checker.check("落盘文件里 wmEngine 也是 lama（telea 未被写进磁盘）", () => {
+  checker.check("落盘文件里 wmEngine 也是 lama，且不含 wmMask", () => {
     assert.ok(fs.existsSync(SETTINGS_FILE), `配置未落盘：${SETTINGS_FILE}`);
     const saved = JSON.parse(fs.readFileSync(SETTINGS_FILE, "utf8"));
     assert.equal(saved.wmEngine, "lama", `落盘内容 = ${JSON.stringify(saved)}`);
-    assert.equal(saved.wmMask, "rect");
+    assert.ok(
+      !Object.prototype.hasOwnProperty.call(saved, "wmMask"),
+      `落盘内容不该有 wmMask（旧键不回写）：${JSON.stringify(saved)}`,
+    );
   });
 
   // ── DELETE ─────────────────────────────────────────────────────────────────

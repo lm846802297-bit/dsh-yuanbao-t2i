@@ -2,17 +2,29 @@
 """wm_lama.py — LaMa 引擎去水印（simple-lama-inpainting，GPU/CPU 自适应）。
 
 用法：
-  python wm_lama.py --src <目录> --dst <目录> --roi x0,y0,x1,y1 [--mask rect|tight] [--device cuda]
+  python wm_lama.py --src <目录> --dst <目录> --roi x0,y0,x1,y1 [--mask auto|tight|rect] [--device cuda]
 
-掩膜模式：
+掩膜模式（v0.10.0 起默认 auto）：
   rect  ROI 整块白矩形交给 LaMa 重建 —— 最稳、但重修面积大，插画类会「糊一片」。
-  tight （插件默认）在 ROI 内检出字形，膨胀成紧贴字形的掩膜后再修 —— 重修面积小得多、痕更轻。
+  tight 在 ROI 内检出字形，膨胀成紧贴字形的掩膜后再修 —— 重修面积小得多、痕更轻。
+  auto  （默认）先走 tight 精确检测；检测不可信就自动降级 rect，修完还做一道「残痕自检」，
+        自检不过再用 rect 重修。⇒ 调用方不用再关心选哪个。
 
-    元宝水印是半透明白叠加：暗背景上是**亮笔画**，白背景上是**暗笔画**（只比纸暗 3-9 级）。
-    固定绝对阈值必然一头踩空（thr=185 在纯白图上命中 100%＝把整块背景当字形抹平），
-    所以 tight 默认走**自适应**：阈值由 ROI 自身亮度分布导出，两端都试，取命中面积更小的
-    那一端（白底图自动切暗笔画、暗底图自动切亮笔画）。仍可用 --thr/--sat/--dilate 显式覆盖。
-    两端命中面积都超过 ROI 的 60% ⇒ 判定「tight 不可信」，自动降级 rect 并打印原因。
+检测口径（v0.10.0 重写，旧口径有真 bug）：
+  旧实现：阈值取 ROI 亮度分布的 p99.5 / p0.5，两端各出一个候选，取**命中面积更小**的一端。
+  ⚠️ 实测 8 张真样本：3 张选中端命中率只有 0.65% / 0.07% / 0.00% ——「面积更小」被当成
+  「更干净」，其实是**检测失效**（掩膜近空）⇒ 水印原样留着，且不报错、不降级。
+  新实现：
+    ① **位置先验**：水印固定在 ROI 的相对框内（PRIOR_BOX），只在这一带检测 ⇒ 大面积纹理误判消失。
+    ② **局部背景**：用大核中值滤波（MED_K=41，比字形笔画宽）估计背景，取 |亮度-背景| 作笔画强度
+       —— 不再区分「亮笔画/暗笔画」，白底暗字与暗底亮字同一套逻辑。
+    ③ **自适应阈值**：delta = max(6, 2.5 × MAD)，MAD 在全 ROI 低饱和像素上算 ⇒ 干净图 delta 小、
+       脏图 delta 大。
+    ④ **可信度闸**：命中率必须落在 [0.5%, 25%]（占 ROI）。低于下限＝检测失效；高于上限＝把背景
+       当字形 ⇒ 都判不可信，auto 模式下降级 rect。
+    ⑤ **残痕自检**：tight 修完后再用同一套检测跑一遍输出图，若仍检出 ≥ max(0.4%, 35% 原始命中)
+       的笔画 ⇒ 判定没修净 ⇒ 用 rect 重修（并打印原因）。
+  仍可用 --thr/--sat/--dilate 显式覆盖。
 
 tight 的上下文：以掩膜外接框外扩 --ctx 像素裁切，只把这块送进模型，回填时按羽化掩膜混合，
 避免接缝。--ctx 不是越大越好：实测 16 张全样本，ctx=160 时裁切块 16-42 万 px，
@@ -22,25 +34,88 @@ tight 的上下文：以掩膜外接框外扩 --ctx 像素裁切，只把这块�
 import argparse
 import os
 
+# ── 水印几何／检测参数（集中在这里，便于回归与调参）────────────────────────────
+PRIOR_BOX = (0.60, 0.50, 0.98, 0.95)   # 水印必落在此框内（相对 ROI 的 x0,y0,x1,y1）
+MED_K = 41                             # 局部背景中值核（> 笔画宽度，实测笔画 ~8-12px）
+MAD_MULT = 2.5
+MAD_FLOOR = 6.0
+MIN_HIT = 0.005                        # 命中率下限（占 ROI），低于此判「检测失效」
+MAX_HIT = 0.25                         # 命中率上限，高于此判「把背景当字形」
+SELF_CHECK_RATIO = 0.35                # 残痕自检：残留 / 原始命中 超过此比例 ⇒ 判没修净
+SELF_CHECK_FLOOR = 0.004
+
 
 def build_rect_mask(w, h, roi):
-    from PIL import Image
+    """ROI 整块白矩形。坐标先夹紧到图内并保证 x1>x0、y1>y0。
 
-    x0, y0, x1, y1 = roi
+    ⚠️ 夹紧不是洁癖：roi 来自调用方的 `wmRoi` 参数或 DSH_WM_ROI 环境变量，
+    传反了（x0>x1）时 PIL 的 rectangle 会直接抛 `ValueError: x1 must be greater than
+    or equal to x0` ⇒ 整个去水印步骤崩掉（实测踩过）。夹紧后退化成 1px 掩膜，
+    LaMa 基本不动原图，属于「安全失败」。
+    """
+    from PIL import Image, ImageDraw
+
+    x0 = max(0, min(w - 1, int(round(float(roi[0]) * w))))
+    y0 = max(0, min(h - 1, int(round(float(roi[1]) * h))))
+    x1 = max(x0 + 1, min(w, int(round(float(roi[2]) * w))))
+    y1 = max(y0 + 1, min(h, int(round(float(roi[3]) * h))))
     px = Image.new("L", (w, h), 0)
-    from PIL import ImageDraw
-
-    ImageDraw.Draw(px).rectangle(
-        [int(x0 * w), int(y0 * h), int(x1 * w) - 1, int(y1 * h) - 1], fill=255
-    )
+    ImageDraw.Draw(px).rectangle([x0, y0, x1 - 1, y1 - 1], fill=255)
     return px
 
 
-def build_tight_mask(img, roi, thr, sat, dilate):
-    """在 ROI 内检出字形像素，膨胀成掩膜。返回 (mask, 说明)。
+def detect_glyph(img, roi, sat=45, med_k=MED_K, mult=MAD_MULT, floor=MAD_FLOOR):
+    """在 ROI 内检测水印笔画像素（v2 口径）。返回 dict：
 
-    thr=None 时走自适应：元宝水印是半透明白叠加，暗底上是亮笔画、白底上是暗笔画。
-    固定绝对阈值会一头踩空 ⇒ 阈值改由 ROI 自身亮度分布导出，两端都检，取命中面积小的一端。
+    glyph  bool ndarray（ROI 尺寸，True＝笔画像素）
+    hit    命中率（占 ROI 面积）
+    delta  实际使用的阈值
+    mad    低饱和像素 |亮度-局部背景| 的中位数
+    box    检测带（ROI 内像素坐标 x0,y0,x1,y1）
+    """
+    import numpy as np
+    from PIL import Image, ImageFilter
+
+    w, h = img.size
+    x0, y0, x1, y1 = int(roi[0] * w), int(roi[1] * h), int(roi[2] * w), int(roi[3] * h)
+    sub = img.crop((x0, y0, x1, y1))
+    a = np.asarray(sub).astype(np.int16)
+    lum = a.mean(axis=2)
+    mx, mn = a.max(axis=2), a.min(axis=2)
+    lowsat = (mx - mn) < sat
+
+    med = np.asarray(
+        Image.fromarray(np.clip(lum, 0, 255).astype(np.uint8)).filter(
+            ImageFilter.MedianFilter(med_k)
+        )
+    ).astype(np.float32)
+    dev = np.abs(lum.astype(np.float32) - med)
+
+    sh, sw = lum.shape
+    bx0, by0 = int(PRIOR_BOX[0] * sw), int(PRIOR_BOX[1] * sh)
+    bx1, by1 = int(PRIOR_BOX[2] * sw), int(PRIOR_BOX[3] * sh)
+    box = np.zeros((sh, sw), dtype=bool)
+    box[by0:by1, bx0:bx1] = True
+
+    sample = dev[lowsat]
+    mad = float(np.median(sample)) if sample.size else 0.0
+    delta = max(floor, mult * mad)
+    glyph = (dev > delta) & box & lowsat
+    total = max(1, sw * sh)
+    return {
+        "glyph": glyph,
+        "hit": float(glyph.sum()) / total,
+        "delta": float(delta),
+        "mad": float(mad),
+        "box": (bx0, by0, bx1, by1),
+    }
+
+
+def build_tight_mask(img, roi, thr, sat, dilate):
+    """检出字形并膨胀成掩膜。返回 (mask, note, info)。
+
+    info["ok"] is False ⇒ 检测不可信（此时返回的是 rect 掩膜，调用方应把模式当 rect 处理）。
+    thr 非 None 时走固定阈值（旧行为，保留给 --thr 显式覆盖）。
     """
     import numpy as np
     from PIL import Image, ImageFilter
@@ -48,57 +123,40 @@ def build_tight_mask(img, roi, thr, sat, dilate):
     w, h = img.size
     x0, y0, x1, y1 = int(roi[0] * w), int(roi[1] * h), int(roi[2] * w), int(roi[3] * h)
     if x1 <= x0 or y1 <= y0:
-        return build_rect_mask(w, h, roi), "ROI 非法，回退 rect"
-
-    sub = np.asarray(img.crop((x0, y0, x1, y1))).astype(np.int16)
-    mx = sub.max(axis=2)
-    mn = sub.min(axis=2)
-    lowsat = (mx - mn) < sat
+        return build_rect_mask(w, h, roi), "ROI 非法，回退 rect", {"ok": False, "hit": 0.0}
 
     if thr is None:
-        # 自适应：两端各出一个候选掩膜，取命中面积更小的一端
-        lum = sub.mean(axis=2)
-        p_hi = float(np.percentile(lum, 99.5))
-        p_lo = float(np.percentile(lum, 0.5))
-        bright = ((lum > p_hi - 12) & lowsat).astype(np.uint8) * 255
-        dark = ((lum < p_lo + 12) & lowsat).astype(np.uint8) * 255
-        nb, nd = int((bright > 0).sum()), int((dark > 0).sum())
-        total = sub.shape[0] * sub.shape[1]
-        if nd == 0 and nb == 0:
-            return build_rect_mask(w, h, roi), "自适应两端均未检出字形，回退 rect"
-        # ⚠️ 0 命中 ≠ 「这一端更好」：0 命中说明该端「不可用」，而不是「更干净」。
-        #    真机回归抓到过：彩色图上暗端命中 0、亮端命中 3.18%，旧逻辑盲选 0 命中那端
-        #    ⇒ 掩膜为空 ⇒ 退回 rect ⇒ 整块 ROI 被重绘（实测 ROI 96% 像素被改）。
-        #    所以只有两端都 >0 时才比大小；某一端为 0 时直接用另一端。
-        if nd == 0:
-            glyph, side, nsel = bright, "亮", nb
-            note = f"亮笔画 p99.5-12={p_hi - 12:.0f} 命中 {nb / total:.1%}（暗端未检出）"
-        elif nb == 0:
-            glyph, side, nsel = dark, "暗", nd
-            note = f"暗笔画 p0.5+12={p_lo + 12:.0f} 命中 {nd / total:.1%}（亮端未检出）"
-        elif nd < nb:
-            glyph, side, nsel = dark, "暗", nd
-            note = f"暗笔画 p0.5+12={p_lo + 12:.0f} 命中 {nd / total:.1%}（亮端 {nb / total:.1%}）"
-        else:
-            glyph, side, nsel = bright, "亮", nb
-            note = f"亮笔画 p99.5-12={p_hi - 12:.0f} 命中 {nb / total:.1%}（暗端 {nd / total:.1%}）"
-        # 选中的这一端自己超 ROI 60% ⇒ 掩膜已经糊住大半背景，别硬修
-        if nsel > 0.6 * total:
+        d = detect_glyph(img, roi, sat)
+        hit = d["hit"]
+        detail = (f"v2检测 命中 {hit:.2%}（delta={d['delta']:.0f} mad={d['mad']:.2f} "
+                  f"带={d['box']}）")
+        if hit < MIN_HIT:
             return build_rect_mask(w, h, roi), (
-                f"{side}笔画检出面积 {nsel / total:.0%} 超 ROI 60%"
-                "（疑似白底/亮背景误遮），回退 rect"
-            )
+                f"检测失效：命中仅 {hit:.2%} < {MIN_HIT:.1%} ⇒ 降级 rect（{detail}）"
+            ), {"ok": False, "hit": hit}
+        if hit > MAX_HIT:
+            return build_rect_mask(w, h, roi), (
+                f"检测不可信：命中 {hit:.2%} > {MAX_HIT:.0%} ⇒ 降级 rect（{detail}）"
+            ), {"ok": False, "hit": hit}
+        glyph = d["glyph"].astype(np.uint8) * 255
+        note = f"字形掩膜 {detail} sat={sat} dilate≈{dilate}px"
     else:
+        sub = np.asarray(img.crop((x0, y0, x1, y1))).astype(np.int16)
+        mx, mn = sub.max(axis=2), sub.min(axis=2)
+        lowsat = (mx - mn) < sat
         glyph = ((mx > thr) & lowsat).astype(np.uint8) * 255
-        if glyph.sum() == 0:
-            return build_rect_mask(w, h, roi), f"ROI 内未检出字形（thr={thr} sat={sat}），回退 rect"
-        total = sub.shape[0] * sub.shape[1]
-        if int((glyph > 0).sum()) > 0.6 * total:
+        total = max(1, sub.shape[0] * sub.shape[1])
+        nsel = int((glyph > 0).sum())
+        if nsel == 0:
             return build_rect_mask(w, h, roi), (
-                f"固定阈值命中面积 {int((glyph > 0).sum()) / total:.0%} 超 ROI 60%"
-                "（疑似白底/亮背景误遮），回退 rect"
-            )
-        note = f"thr={thr} sat={sat}"
+                f"ROI 内未检出字形（thr={thr} sat={sat}），回退 rect"
+            ), {"ok": False, "hit": 0.0}
+        hit = nsel / total
+        if hit > 0.6:
+            return build_rect_mask(w, h, roi), (
+                f"固定阈值命中面积 {hit:.0%} 超 ROI 60%（疑似白底/亮背景误遮），回退 rect"
+            ), {"ok": False, "hit": hit}
+        note = f"字形掩膜 thr={thr} sat={sat} 命中 {hit:.2%} dilate≈{dilate}px"
 
     mask = Image.fromarray(glyph)
     # PIL 的 MaxFilter 只吃小核，重复几次累计膨胀（9 核≈每边 +4px，7 次≈28px，够包住字边）
@@ -108,7 +166,30 @@ def build_tight_mask(img, roi, thr, sat, dilate):
             mask = mask.filter(ImageFilter.MaxFilter(9))
     full = Image.new("L", (w, h), 0)
     full.paste(mask, (x0, y0))
-    return full, f"字形掩膜 {note} sat={sat} dilate≈{dilate}px"
+    return full, note, {"ok": True, "hit": hit}
+
+
+def repair_tight(lama, img, mask, ctx):
+    """tight 路径：只把「掩膜 + 上下文」这一块送模型，回填时按羽化掩膜混合，避免整图重建。"""
+    from PIL import Image, ImageFilter
+
+    w, h = img.size
+    bbox = mask.getbbox()
+    if not bbox:
+        return None
+    x0 = max(0, bbox[0] - ctx)
+    y0 = max(0, bbox[1] - ctx)
+    x1 = min(w, bbox[2] + ctx)
+    y1 = min(h, bbox[3] + ctx)
+    crop = img.crop((x0, y0, x1, y1))
+    crop_mask = mask.crop((x0, y0, x1, y1))
+    filled = lama(crop, crop_mask).convert("RGB")
+    # SimpleLama 只往右/下 pad 到 8 的倍数，输出会比输入大几像素，裁回原尺寸
+    filled = filled.crop((0, 0, crop.width, crop.height))
+    soft = crop_mask.filter(ImageFilter.GaussianBlur(2.0))
+    out = img.copy()
+    out.paste(Image.composite(filled, crop, soft), (x0, y0))
+    return out
 
 
 def main():
@@ -116,11 +197,15 @@ def main():
     ap.add_argument("--src", required=True)
     ap.add_argument("--dst", required=True)
     ap.add_argument("--roi", required=True, help="x0,y0,x1,y1 相对比例")
-    ap.add_argument("--mask", default="rect", choices=["rect", "tight"], help="掩膜模式")
-    ap.add_argument("--thr", type=int, default=None, help="tight：近白阈值（0-255）；缺省＝按 ROI 亮度分布自适应")
+    ap.add_argument("--mask", default="auto", choices=["auto", "tight", "rect"],
+                    help="掩膜模式：auto（默认，自适应）/ tight（强制紧贴字形）/ rect（强制整块）")
+    ap.add_argument("--thr", type=int, default=None,
+                    help="tight：固定亮度阈值（0-255）；缺省＝v2 自适应检测")
     ap.add_argument("--sat", type=int, default=45, help="tight：最大通道差上限（越低越只认灰白）")
     ap.add_argument("--dilate", type=int, default=25, help="tight：掩膜膨胀半径（像素）")
     ap.add_argument("--ctx", type=int, default=64, help="tight：送模型的上下文外扩（像素）")
+    ap.add_argument("--selfcheck", default="1", choices=["0", "1"],
+                    help="修完做残痕自检，不过则用 rect 兜底（1=开，默认）")
     ap.add_argument("--device", default=None, help="cuda / cpu（默认自动）")
     a = ap.parse_args()
 
@@ -130,12 +215,12 @@ def main():
         return 2
     os.makedirs(a.dst, exist_ok=True)
 
-    from PIL import Image, ImageFilter
+    from PIL import Image
     from simple_lama_inpainting import SimpleLama
     import torch
 
     device = a.device or ("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"[wm_lama] device={device} mask={a.mask}", flush=True)
+    print(f"[wm_lama] device={device} mask={a.mask} selfcheck={a.selfcheck}", flush=True)
     lama = SimpleLama(device=device)
 
     exts = (".png", ".jpg", ".jpeg", ".webp")
@@ -145,41 +230,49 @@ def main():
             continue
         img = Image.open(os.path.join(a.src, name)).convert("RGB")
         w, h = img.size
-        if a.mask == "tight":
-            mask, note = build_tight_mask(img, roi, a.thr, a.sat, a.dilate)
+        mode = a.mask
+        info = {"ok": False, "hit": 0.0}
+        note = ""
+
+        if mode in ("auto", "tight"):
+            mask, note, info = build_tight_mask(img, roi, a.thr, a.sat, a.dilate)
             print(f"[wm_lama] {name}: {note}", flush=True)
-        else:
+            if not info["ok"]:
+                if mode == "tight":
+                    print(f"[wm_lama] {name}: 强制 tight 但检测不可信，按 rect 处理", flush=True)
+                mode = "rect"
+        if mode == "rect":
             mask = build_rect_mask(w, h, roi)
 
-        bbox = mask.getbbox()
-        if a.mask == "tight" and not bbox:
-            # 理论上 build_tight_mask 不会返回空掩膜（空则已回退 rect），但真出现时空转整图会把
-            # 整张图交给 LaMa 重绘（等于变相糊整图）⇒ 退化成 rect 掩膜走下面的整块路径更稳。
-            print(f"[wm_lama] {name}: tight 掩膜为空，回退 rect", flush=True)
+        if not mask.getbbox():
+            print(f"[wm_lama] {name}: 掩膜为空，回退 rect", flush=True)
             mask = build_rect_mask(w, h, roi)
-        if a.mask == "tight" and bbox:
-            # tight：只把「掩膜 + 上下文」这一块送模型，回填时按羽化掩膜混合，避免整图重建
-            # ctx 默认 64（历史值 160 实测过大：裁切块比 ROI 自身还大 3-5 倍，见模块 docstring）
-            x0 = max(0, bbox[0] - a.ctx)
-            y0 = max(0, bbox[1] - a.ctx)
-            x1 = min(w, bbox[2] + a.ctx)
-            y1 = min(h, bbox[3] + a.ctx)
-            crop = img.crop((x0, y0, x1, y1))
-            crop_mask = mask.crop((x0, y0, x1, y1))
-            filled = lama(crop, crop_mask).convert("RGB")
-            # SimpleLama 只往右/下 pad 到 8 的倍数，输出会比输入大几像素，裁回原尺寸
-            filled = filled.crop((0, 0, crop.width, crop.height))
-            soft = crop_mask.filter(ImageFilter.GaussianBlur(2.0))
-            out = img.copy()
-            out.paste(Image.composite(filled, crop, soft), (x0, y0))
+            mode = "rect"
+
+        if mode == "tight":
+            out = repair_tight(lama, img, mask, a.ctx)
+            if out is None:
+                out = lama(img, build_rect_mask(w, h, roi)).convert("RGB").crop((0, 0, w, h))
         else:
             out = lama(img, mask)
             out = out.convert("RGB").crop((0, 0, w, h))
 
+        # 残痕自检：用同一套检测跑一遍修好的图；还检得出笔画 ⇒ 没修净 ⇒ rect 兜底重修
+        if a.selfcheck == "1" and info["ok"] and info["hit"] > 0:
+            resid = detect_glyph(out, roi, a.sat)
+            alarm = max(SELF_CHECK_FLOOR, SELF_CHECK_RATIO * info["hit"])
+            if resid["hit"] >= alarm:
+                print(f"[wm_lama] {name}: 残痕自检未过（残留 {resid['hit']:.2%} ≥ 阈值 "
+                      f"{alarm:.2%}，原命中 {info['hit']:.2%}）⇒ 改用 rect 重修", flush=True)
+                out = lama(img, build_rect_mask(w, h, roi)).convert("RGB").crop((0, 0, w, h))
+                note += f"＋自检未过（残留 {resid['hit']:.2%}）→rect 兜底"
+            else:
+                note += f"＋自检通过（残留 {resid['hit']:.2%}）"
+
         stem = os.path.splitext(name)[0]
         out.save(os.path.join(a.dst, stem + ".png"))
         n += 1
-        print(f"[wm_lama] {name} -> {stem}.png", flush=True)
+        print(f"[wm_lama] {name} -> {stem}.png  [{note}]", flush=True)
     print(f"[wm_lama] done {n}", flush=True)
     return 0
 

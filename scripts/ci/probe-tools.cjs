@@ -6,7 +6,9 @@
 //   - 注册了 2 个工具：yuanbao_t2i / yuanbao_t2i_styles
 //   - yuanbao_t2i 的参数（注册对象上的字段名是 `t.parameters`，不是 `t.schema`）里含
 //     prompt / style / refImages / dstIntent / imageRatio / imageResolution / imageModel /
-//     outDir / removeWatermark / wmEngine / wmMask
+//     outDir / removeWatermark / wmEngine
+//   - ⛔ 入参 schema 里**不得**再有 wmMask（v0.10.0：掩膜改由 wm_lama.py 内部自适应 auto，
+//     仅留环境变量 DSH_WM_MASK 兜底，不再作为公开参数）——见下方 REMOVED_PARAMS 断言
 //   - wmEngine 的 enum 只含 lama
 //   - 每个工具都有 output.schema（对象）且 output.render 是函数
 //   - timeoutMs 是正有限数
@@ -36,8 +38,11 @@ const REQUIRED_PARAMS = [
   "outDir",
   "removeWatermark",
   "wmEngine",
-  "wmMask",
 ];
+
+// ⛔ 已从公开入参 schema 撤掉的参数（撤了就是撤了：schema 里必须查无此键）。
+//    注意这是**反向断言**、不是恒真式：只要有人把 wmMask 加回 properties 就会红。
+const REMOVED_PARAMS = ["wmMask"];
 
 async function loadPluginModule() {
   let mode = "real";
@@ -153,6 +158,16 @@ function makeCtx() {
   checker.check("yuanbao_t2i.required 含 prompt", () => {
     const req = t2i.parameters.required || [];
     assert.ok(req.includes("prompt"), `required = ${JSON.stringify(req)}`);
+  });
+
+  checker.check("⛔ 入参 schema 里不得再有：" + REMOVED_PARAMS.join(", "), () => {
+    const props = (t2i.parameters && t2i.parameters.properties) || {};
+    const back = REMOVED_PARAMS.filter((k) => Object.prototype.hasOwnProperty.call(props, k));
+    assert.equal(
+      back.length,
+      0,
+      `这些参数已撤下、不该回到入参 schema：${back.join(", ")}（实际 properties：${Object.keys(props).join(", ")}）`,
+    );
   });
 
   checker.check("wmEngine 的 enum 只含 lama", () => {

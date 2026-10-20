@@ -18,3 +18,7 @@ lama_clean/
 Thumbs.db
 .vscode/
 .idea/
+
+# Python（wm_lama.py 被 py_compile / 直接跑时会生成）
+__pycache__/
+*.pyc

@@ -61,8 +61,19 @@ jobs:
             npm install --ignore-scripts --no-audit --no-fund --no-package-lock
           fi
 
+      # 掩膜闸门要真跑 PIL/numpy（合成图上验「该降级时降级」）；装这两包 ~10s，不装 torch
+      - name: Python deps (numpy + pillow, for mask gate)
+        run: python -m pip install --quiet --disable-pip-version-check numpy pillow
+
       - name: Syntax check (node --check + py_compile)
         run: node scripts/ci/check-syntax.cjs
+
+      # 掩膜检测闸门：真跑 wm_lama 的检测函数（不是静态扫描）——v0.9.0 前的「掩膜近空、
+      # 静默不修」只有行为测试能抓住。显式指定解释器，⛔ 别让它因为找不到 numpy 而 SKIP。
+      - name: Mask gate (掩膜检测闸门)
+        env:
+          DSH_LAMA_PYTHON: python
+        run: node scripts/ci/probe-mask.cjs
 
       - name: Tool registration probe
         run: node scripts/ci/probe-tools.cjs
@@ -70,7 +81,7 @@ jobs:
       - name: Route probe
         run: node scripts/ci/probe-routes.cjs
 
-      # 历史回归锁：7 条曾经真机踩过、而 lint/语法检查抓不到的静默失效
+      # 历史回归锁：9 条曾经真机踩过、而 lint/语法检查抓不到的静默失效
       - name: Workflow structure gate (workflow 结构闸)
         run: node scripts/ci/check-workflows.cjs
 
