@@ -334,6 +334,14 @@ IOPaint 的另两个主流模型都试通了，但都不比 `lama + tight` 好�
 for f in check-syntax probe-tools probe-routes check-package check-regressions; do node scripts/ci/$f.cjs || break; done
 ```
 
+### 红了怎么知道（失败通知）
+
+CI 挂了会**自动开一张 issue**（标题 `CI 失败 · <触发方式>`），GitHub 按仓库 watch 设置发邮件——不接 webhook、不配 secret、不引第三方 action。
+
+- 同一标题的已开 issue 会**复用**（往里追加评论），不会每红一次刷一张屏；
+- 修好、CI 转绿后，请**手动关闭**那张 issue（CI 不会自动关，避免"修了但没验证"被误判成已解决）；
+- 自测通知链路：Actions → Run workflow → 勾 `force_fail` ⇒ 四个 check 会按预期变红，并开一张 issue。
+
 ### 历史回归锁锁的是什么
 
 每一条都对应一次真实事故，且都是「语法合法、运行不报错，只是静默做错事」：
