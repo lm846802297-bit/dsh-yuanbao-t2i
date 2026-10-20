@@ -131,11 +131,12 @@ IOPaint 的另两个主流模型都试通了，但都不比 `lama + tight` 好�
 | --- | --- | --- | --- | --- |
 | `lama` + `tight`（本插件默认） | 196MB | 约 1–3 s/张 | **0.63% / 1.48% / 1.44%** | ✅ 结构全保（非水印区改动 **0.000%**） |
 | MAT（Places_512） | 239MB | 1024-tile fp16 forward 1.03 s / peak 2.29GB | 2.88% / 3.32% / 2.99% | ❌ 水印区残留清晰斜向网格痕迹，塔身右侧被糊成一片 |
-| ZITS（4 件套） | 390MB | 全图 fp16 infer 2.88 s/张（加载 0.71 s）/ peak 6.09 GB | 4.76% / 3.74% / 3.68% | ❌ 非水印区也被改 0.234%，水印区洗成大片浅灰雾状 |
+| ZITS（4 件套，`.pt` 非 `.pth`） | 373 MiB | 全图 fp16 infer 2.88 s/张（加载 0.71 s）/ peak 6.09 GB；CPU 19.85 s/张 | 4.76% / 3.74% / 3.68% | ❌ 非水印区也被改 0.234%，水印区洗成大片浅灰雾状 |
 
 - 三家的掩膜都是**同一块矩形**（`x 0.679–1.0, y 0.86–1.0`）⇒ 差异全来自模型本身，可比。
 - MAT 是 **512 定频模型**：输入必须是 512 的倍数（2048 会 OOM），所以走「右下 1024×1024 tile 推理后贴回」；ZITS 可全图直接跑但显存吃满 6GB。
-- ZITS 必须设 `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`，否则 OOM；其 LCNN wireframe `.pt` 权重硬编码 CPU，只能 CPU 跑。
+- ZITS 必须设 `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`，否则 OOM（根因：ZITS 把图 pad 成正方形，1872×1248 → 1888×1888，面积 ×2.26 再跑四阶段）；其 LCNN wireframe `.pt` 权重导出时把设备烤死为 CPU，**只能在 CPU 跑**。
+- ZITS 在本机 default env **零新装依赖**（torch 2.14.0+cu130 / cv2 5.0 / numpy 2.5.3 / skimage 0.26.0 全就位）；CUDA vs CPU 结果 maxdiff 6 / mean 0.023，数值等价。完整实测报告：`IOPaint 实测` 的本地副本见会话记录。
 - 结论：**`tight` 掩膜 + Big-LaMa 是当前性价比最优解**——改动面积只有 MAT/ZITS 的 1/4~1/7，且是唯一不在水印区外留痕的。若未来元宝水印改成**非近白配色**（tight 的字形检出会失效），再考虑 MAT/ZITS 作 `rect` 的备选。
 
 **补充（2026-10-20 实测追加）**：ZITS 的文字擦除确实比 `tight` + LaMa 更干净——水彩图的「暗像素残留」从 tight+LaMa 的 **2523** 降到 ZITS 的 **15**；但代价是纹理被糊掉一个量级：
