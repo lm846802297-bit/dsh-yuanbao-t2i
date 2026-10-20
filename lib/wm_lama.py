@@ -15,7 +15,9 @@
     两端命中面积都超过 ROI 的 60% ⇒ 判定「tight 不可信」，自动降级 rect 并打印原因。
 
 tight 的上下文：以掩膜外接框外扩 --ctx 像素裁切，只把这块送进模型，回填时按羽化掩膜混合，
-避免接缝。
+避免接缝。--ctx 不是越大越好：实测 16 张全样本，ctx=160 时裁切块 16-42 万 px，
+而 ROI 本身只有 7.5-8.0 万 px ⇒ 白送 3-5 倍面积进模型（LaMa 会把整块重绘，等于变相糊背景）。
+默认收到 64（裁切块总面积降到 1/2.5），仍留有足够上下文让接缝自然。
 """
 import argparse
 import os
@@ -106,7 +108,7 @@ def main():
     ap.add_argument("--thr", type=int, default=None, help="tight：近白阈值（0-255）；缺省＝按 ROI 亮度分布自适应")
     ap.add_argument("--sat", type=int, default=45, help="tight：最大通道差上限（越低越只认灰白）")
     ap.add_argument("--dilate", type=int, default=25, help="tight：掩膜膨胀半径（像素）")
-    ap.add_argument("--ctx", type=int, default=160, help="tight：送模型的上下文外扩（像素）")
+    ap.add_argument("--ctx", type=int, default=64, help="tight：送模型的上下文外扩（像素）")
     ap.add_argument("--device", default=None, help="cuda / cpu（默认自动）")
     a = ap.parse_args()
 
@@ -140,6 +142,7 @@ def main():
         bbox = mask.getbbox()
         if a.mask == "tight" and bbox:
             # tight：只把「掩膜 + 上下文」这一块送模型，回填时按羽化掩膜混合，避免整图重建
+            # ctx 默认 64（历史值 160 实测过大：裁切块比 ROI 自身还大 3-5 倍，见模块 docstring）
             x0 = max(0, bbox[0] - a.ctx)
             y0 = max(0, bbox[1] - a.ctx)
             x1 = min(w, bbox[2] + a.ctx)
