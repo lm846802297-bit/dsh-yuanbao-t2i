@@ -96,8 +96,7 @@ DSH **设置 → 插件 → dsh-yuanbao-t2i → 生成设置**：
 
 - 输出目录（留空＝默认）
 - 生成后自动去水印（开/关）
-- 去水印引擎（Big-LaMa / OpenCV）
-- 修复范围（只修字形 / 整块矩形；仅 Big-LaMa 引擎可选）
+- 修复范围（只修字形 / 整块矩形；`telea` 引擎已于 v0.5.0 下架，去水印现在只走 `lama`）
 - 保存
 
 设置存在 `~/.dsh/yuanbao-t2i-config.json`，由宿主的 `GET|POST /yuanbao-t2i/config` 路由读写（loopback only）。
