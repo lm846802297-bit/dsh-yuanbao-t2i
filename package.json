@@ -1,7 +1,7 @@
 {
   "name": "dsh-yuanbao-t2i",
-  "version": "0.5.1",
-  "description": "DSH 插件：腾讯元宝网页版文生图（yuanbao/t2i）。走 yuanbao.tencent.com 的 /api/chat SSE，从 type=replace 的 multimedias 取图，落盘为 PNG。自带 patchright，独立于 dsh-playwright-ag。自带浏览器端设置卡（Plugins 页可选输出目录、去水印开关、修复范围，支持系统目录选择器）。",
+  "version": "0.6.0",
+  "description": "DSH 插件：腾讯元宝网页版文生图 + 图生图（yuanbao_t2i 工具 + 插件内设置卡，支持参考图上传 COS + LaMa 去水印）。走 yuanbao.tencent.com 的 /api/chat SSE，从 type=replace 的 multimedias 取图，落盘为 PNG。支持 refImages 参数传参考图（本地路径/URL/文件夹）自动走图生图。自带 patchright，独立于 dsh-playwright-ag。自带浏览器端设置卡（Plugins 页可选输出目录、去水印开关、修复范围，支持系统目录选择器）。",
   "type": "module",
   "main": "./lib/plugin.js",
   "exports": {
