@@ -24,7 +24,10 @@ window.__ModuleLoader__.load({
         engine: "去水印引擎",
         lama: "Big-LaMa 深度模型（默认，质量好，慢）",
         telea: "OpenCV 修复（快，痕迹明显）",
-        note: "此设置为默认值；单次调用仍可用参数 outDir / removeWatermark / wmEngine 临时覆盖。",
+        mask: "修复范围",
+        maskTight: "只修字形（默认，痕轻）",
+        maskRect: "整块矩形（稳，但会糊一片）",
+        note: "此设置为默认值；单次调用仍可用参数 outDir / removeWatermark / wmEngine / wmMask 临时覆盖。",
         save: "保存",
         saving: "保存中…",
         saved: "已保存",
@@ -45,7 +48,10 @@ window.__ModuleLoader__.load({
         engine: "Watermark engine",
         lama: "Big-LaMa depth model (default, best quality, slower)",
         telea: "OpenCV inpaint (fast, visible traces)",
-        note: "These are defaults; a single call can still override them with outDir / removeWatermark / wmEngine.",
+        mask: "Repair area",
+        maskTight: "Glyph-only (default, lighter traces)",
+        maskRect: "Whole rectangle (safe, but smears)",
+        note: "These are defaults; a single call can still override them with outDir / removeWatermark / wmEngine / wmMask.",
         save: "Save",
         saving: "saving…",
         saved: "saved",
@@ -105,8 +111,8 @@ window.__ModuleLoader__.load({
           return t.summary;
         }
         var loadedState = react.useState(false);
-        var settingsState = react.useState({ removeWatermark: false, wmEngine: "lama", outDir: "" });
-        var draftState = react.useState({ removeWatermark: false, wmEngine: "lama", outDir: "" });
+        var settingsState = react.useState({ removeWatermark: false, wmEngine: "lama", wmMask: "tight", outDir: "" });
+        var draftState = react.useState({ removeWatermark: false, wmEngine: "lama", wmMask: "tight", outDir: "" });
         var noteState = react.useState("");
         var busyState = react.useState(false);
         var loaded = loadedState[0];
@@ -126,6 +132,7 @@ window.__ModuleLoader__.load({
               var next = {
                 removeWatermark: res.body.removeWatermark === true,
                 wmEngine: res.body.wmEngine === "telea" ? "telea" : "lama",
+                wmMask: res.body.wmMask === "rect" ? "rect" : "tight",
                 outDir: typeof res.body.outDir === "string" ? res.body.outDir : "",
               };
               settingsState[1](next);
@@ -145,6 +152,7 @@ window.__ModuleLoader__.load({
           loaded &&
           draft.removeWatermark === settings.removeWatermark &&
           draft.wmEngine === settings.wmEngine &&
+          draft.wmMask === settings.wmMask &&
           draft.outDir === settings.outDir;
 
         function save() {
@@ -161,6 +169,7 @@ window.__ModuleLoader__.load({
               var next = {
                 removeWatermark: res.body.removeWatermark === true,
                 wmEngine: res.body.wmEngine === "telea" ? "telea" : "lama",
+                wmMask: res.body.wmMask === "rect" ? "rect" : "tight",
                 outDir: typeof res.body.outDir === "string" ? res.body.outDir : "",
               };
               settingsState[1](next);
@@ -245,6 +254,34 @@ window.__ModuleLoader__.load({
               },
               h("option", { value: "lama" }, t.lama),
               h("option", { value: "telea" }, t.telea),
+            ),
+          ),
+          h(
+            "label",
+            { style: { display: "flex", flexDirection: "column", gap: 6 } },
+            h("span", { style: { fontSize: 13 } }, t.mask),
+            h(
+              "select",
+              {
+                value: draft.wmMask,
+                disabled: !loaded || busy || !draft.removeWatermark || draft.wmEngine !== "lama",
+                onChange: (e) => {
+                  var wmMask = e.target.value === "rect" ? "rect" : "tight";
+                  draftState[1](Object.assign({}, draft, { wmMask: wmMask }));
+                },
+                style: {
+                  font: "inherit",
+                  fontSize: 13,
+                  padding: "6px 8px",
+                  borderRadius: 8,
+                  border: "1px solid var(--dsw-alias-border-l2, rgba(127,127,127,0.28))",
+                  background: "var(--dsw-alias-bg-l2, rgba(127,127,127,0.08))",
+                  color: "var(--dsw-alias-label-primary, inherit)",
+                  maxWidth: 420,
+                },
+              },
+              h("option", { value: "tight" }, t.maskTight),
+              h("option", { value: "rect" }, t.maskRect),
             ),
           ),
           h("div", { style: theme.hint }, t.note),

@@ -1,5 +1,6 @@
 {
   "removeWatermark": false,
   "wmEngine": "lama",
+  "wmMask": "tight",
   "outDir": ""
 }
