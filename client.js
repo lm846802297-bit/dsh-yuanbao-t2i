@@ -21,6 +21,12 @@ window.__ModuleLoader__.load({
         outDir: "输出目录",
         outDirHint: "留空＝默认目录（~/.dsh/yuanbao-t2i-out）。填绝对路径则图片和 clean/ 子目录都落在那里。",
         outDirPlaceholder: "例如 D:/CG/元宝生图",
+        browse: "选择目录…",
+        browseCompact: "选择…",
+        browsing: "等待选择…",
+        browseFailed: "打开系统目录选择器失败",
+        browseEmpty: "已取消选择",
+        browseUnavailable: "当前宿主不支持目录选择器（请手动输入路径）",
         mask: "修复范围",
         maskTight: "只修字形（默认，痕轻）",
         maskRect: "整块矩形（稳，但会糊一片）",
@@ -42,6 +48,12 @@ window.__ModuleLoader__.load({
         outDir: "Output directory",
         outDirHint: "Empty = default (~/.dsh/yuanbao-t2i-out). An absolute path sends both images and the clean/ subfolder there.",
         outDirPlaceholder: "e.g. D:/CG/yuanbao",
+        browse: "Browse…",
+        browseCompact: "…",
+        browsing: "Waiting for selection…",
+        browseFailed: "could not open the system folder picker",
+        browseEmpty: "selection cancelled",
+        browseUnavailable: "this host has no folder picker (type the path instead)",
         mask: "Repair area",
         maskTight: "Glyph-only (default, lighter traces)",
         maskRect: "Whole rectangle (safe, but smears)",
@@ -109,11 +121,13 @@ window.__ModuleLoader__.load({
         var draftState = react.useState({ removeWatermark: false, wmEngine: "lama", wmMask: "tight", outDir: "" });
         var noteState = react.useState("");
         var busyState = react.useState(false);
+        var pickingState = react.useState(false);
         var loaded = loadedState[0];
         var settings = settingsState[0];
         var draft = draftState[0];
         var note = noteState[0];
         var busy = busyState[0];
+        var picking = pickingState[0];
 
         react.useEffect(() => {
           var alive = true;
@@ -174,6 +188,31 @@ window.__ModuleLoader__.load({
             .then(() => busyState[1](false));
         }
 
+        function browse() {
+          var pick =
+            typeof window !== "undefined" ? window.__DSH_DESKTOP_PICK_DIRECTORY__ : void 0;
+          if (typeof pick !== "function") {
+            noteState[1](t.browseUnavailable);
+            return;
+          }
+          pickingState[1](true);
+          noteState[1](t.browsing);
+          pick()
+            .then((result) => {
+              var path = result && typeof result === "object" ? result.path : result;
+              if (typeof path !== "string" || path === "") {
+                noteState[1](t.browseEmpty);
+                return;
+              }
+              draftState[1](Object.assign({}, draft, { outDir: path }));
+              noteState[1](path);
+            })
+            .catch((e) =>
+              noteState[1](t.browseFailed + (e && e.message ? "：" + e.message : "")),
+            )
+            .then(() => pickingState[1](false));
+        }
+
         return h(
           "div",
           { style: theme.card },
@@ -220,6 +259,24 @@ window.__ModuleLoader__.load({
                 boxSizing: "border-box",
               },
             }),
+            h(
+              "div",
+              { style: theme.row },
+              h(
+                "button",
+                {
+                  type: "button",
+                  style: theme.button,
+                  disabled: !loaded || busy || picking,
+                  onClick: browse,
+                },
+                picking ? t.browsing : t.browseCompact,
+              ),
+              // 桥不可用（非 win32 / 旧宿主）时就地提示，不等用户点
+              typeof window !== "undefined" && typeof window.__DSH_DESKTOP_PICK_DIRECTORY__ !== "function"
+                ? h("span", { style: theme.hint }, t.browseUnavailable)
+                : null,
+            ),
           ),
           h("div", { style: theme.hint }, t.outDirHint),
           h(
