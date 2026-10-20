@@ -1,0 +1,4 @@
+# 把本地维护的元宝文生图插件挂进 profile 层栈
+- insert:
+    - id: dsh-yuanbao-t2i
+      name: 'dsh-yuanbao-t2i'
