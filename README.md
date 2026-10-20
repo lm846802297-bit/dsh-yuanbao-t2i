@@ -1,8 +1,11 @@
 # dsh-yuanbao-t2i
 
+[![Release](https://img.shields.io/github/v/release/lm846802297-bit/dsh-yuanbao-t2i?label=release&color=blue)](https://github.com/lm846802297-bit/dsh-yuanbao-t2i/releases/latest)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+
 > 当前版本 **v0.5.1**（设置卡新增「选择目录…」按钮，调系统文件夹选择器；v0.5.0 下架 `telea` 引擎，只保留 `lama`）
 
-[DSH](https://github.com/deepseek-ai)（DeepSeek Harness）本地插件：用**腾讯元宝网页版**（混元 Hy Image）文生图，一次 4 张 PNG 直接落盘，并可在插件设置卡里选择是否去水印、用哪个去水印引擎、图片存到哪个目录。
+[DSH](https://github.com/deepseek-ai)（DeepSeek Harness）本地插件：用**腾讯元宝网页版**（混元 Hy Image）文生图，一次 4 张 PNG 直接落盘，并可在插件设置卡里选择图片存到哪个目录（**v0.5.1 起支持点按钮选目录**，不用手敲长路径）、是否去水印、用哪个去水印引擎。
 
 > ⚠️ **性质说明**：本插件通过 [patchright](https://github.com/Kaliiiiiiiiii-Vinyzu/patchright) 驱动真实浏览器登录元宝网页版，复用**你自己账号**的会话。请自行评估账号风险（频繁调用、自动化行为可能触发平台风控），并遵守腾讯元宝的服务条款。作者不对账号受限、图片内容或版权负责。
 
@@ -69,6 +72,8 @@
 4. 把包链接进 profile 的 `node_modules`（Windows 可用 junction）：
    `mklink /J node_modules\dsh-yuanbao-t2i ..\vendor\yuanbao-t2i`
 5. 重启 DSH Desktop（或在 Settings → Plugins 里把本插件关掉再打开）让它加载新的宿主半和浏览器半。
+
+> 💡 **v0.5.1 起新增**：设置卡里「输出目录」旁边多了个**「选择目录…」**按钮，点一下弹 Windows 文件夹选择器，选完自动填进输入框（详见下文「插件界面（设置卡）」）。升级到 v0.5.1 只需 `git pull` + `npm install` + 重载 DSH，老配置文件完全兼容。
 
 ## 用法
 
