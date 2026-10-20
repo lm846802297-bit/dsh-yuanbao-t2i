@@ -14,13 +14,13 @@ window.__ModuleLoader__.load({
     var TEXT = {
       zh: {
         title: "生成设置",
+        summary: "输出目录、是否自动去水印、修复范围。",
         watermark: "生成后自动去水印",
         watermarkHint:
           "开启后每次生成会把图送去水印，产物落在 <输出目录>/clean/ 并保留原图。Big-LaMa 约 3–8 秒/张（GPU）。",
         outDir: "输出目录",
         outDirHint: "留空＝默认目录（~/.dsh/yuanbao-t2i-out）。填绝对路径则图片和 clean/ 子目录都落在那里。",
         outDirPlaceholder: "例如 D:/CG/元宝生图",
-        lama: "Big-LaMa 深度模型（默认，质量好，慢）",
         mask: "修复范围",
         maskTight: "只修字形（默认，痕轻）",
         maskRect: "整块矩形（稳，但会糊一片）",
@@ -35,13 +35,13 @@ window.__ModuleLoader__.load({
       },
       en: {
         title: "Generation settings",
+        summary: "Output directory, watermark removal, and repair scope.",
         watermark: "Remove watermark after generation",
         watermarkHint:
           "When on, every batch is sent through watermark removal; cleaned files land in <outDir>/clean/ and originals are kept. Big-LaMa takes ~3–8 s per image (GPU).",
         outDir: "Output directory",
         outDirHint: "Empty = default (~/.dsh/yuanbao-t2i-out). An absolute path sends both images and the clean/ subfolder there.",
         outDirPlaceholder: "e.g. D:/CG/yuanbao",
-        lama: "Big-LaMa depth model (default, best quality, slower)",
         mask: "Repair area",
         maskTight: "Glyph-only (default, lighter traces)",
         maskRect: "Whole rectangle (safe, but smears)",
