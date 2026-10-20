@@ -1,0 +1,5 @@
+{
+  "removeWatermark": false,
+  "wmEngine": "lama",
+  "outDir": ""
+}
