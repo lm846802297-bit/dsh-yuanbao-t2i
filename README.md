@@ -338,9 +338,17 @@ for f in check-syntax probe-tools probe-routes check-package check-regressions; 
 
 CI 挂了会**自动开一张 issue**（标题 `CI 失败 · <触发方式>`），GitHub 按仓库 watch 设置发邮件——不接 webhook、不配 secret、不引第三方 action。
 
-- 同一标题的已开 issue 会**复用**（往里追加评论），不会每红一次刷一张屏；
+- **标题完全相同**的已开 issue 会**复用**（往里追加评论），不会每红一次刷一张屏；
+  去重是**精确相等**比较，不走模糊搜索——否则「CI 失败 · workflow_dispatch」会把「CI 失败（自测） · workflow_dispatch」也搜出来，真实故障的评论会写进自测那张；
 - 修好、CI 转绿后，请**手动关闭**那张 issue（CI 不会自动关，避免"修了但没验证"被误判成已解决）；
-- 自测通知链路：Actions → Run workflow → 勾 `force_fail` ⇒ 四个 check 会按预期变红，并开一张 issue。
+- 通知逻辑只写在 `.github/workflows/notify-issue.yml`（可复用 workflow），`ci.yml` 与 `self-test.yml` 都调它——**只有一份实现**，改一处不会漏另一处。
+
+### 自测通知链路（单独一个 workflow）
+
+自测**必须故意制造一次红 run**。这件事放在 `.github/workflows/self-test.yml`，**不放进 `ci.yml`**：
+
+- Actions → 左侧选 **CI 自测** → Run workflow（`force_fail` 默认勾上）⇒ 该 workflow 按预期变红，并开一张标题带 **「（自测）」** 的 issue；
+- 若把它塞进主 CI，每验证一次就在 `ci.yml` 历史上留一条红——以后想判断"最近有没有真回归"，得先分辨哪条红是自测。⛔ 自测污染主历史＝把信号变成噪音。
 
 ### 历史回归锁锁的是什么
 

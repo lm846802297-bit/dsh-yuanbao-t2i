@@ -1,0 +1,64 @@
+name: 失败通知（可复用）
+
+# 被 ci.yml 与 self-test.yml 共同调用 —— 通知逻辑只有一份，⛔ 别在两处各抄一遍
+# （抄两遍必然漂移：改了一处忘了另一处，就是本项目 v0.8.0 那类事故的温床）
+#
+# 调用方负责给权限：job 级 permissions 需含 issues: write
+on:
+  workflow_call:
+    inputs:
+      title:
+        description: 'issue 标题前缀（不同调用方用不同标题，去重互不干扰）'
+        required: false
+        type: string
+        default: 'CI 失败'
+      source:
+        description: '触发来源说明（写进 issue 正文）'
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  notify:
+    name: 开/更新失败 issue
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: 开/更新一张失败 issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TITLE: ${{ inputs.title }} · ${{ github.event_name }}
+          SOURCE: ${{ inputs.source }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          BRANCH: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          BODY="$(printf '%s\n' \
+            "**触发方式**：\`${TITLE}\`" \
+            "**来源**：${SOURCE:-未注明}" \
+            "**分支**：\`${BRANCH}\`" \
+            "**提交**：\`${SHA}\`" \
+            "**运行**：${RUN_URL}" \
+            "" \
+            "点上面的运行链接看是哪一格、哪个 step 红了。" \
+            "" \
+            "> 这张 issue 由 CI 自动开；**标题完全相同**的已开 issue 会被复用（追加评论），不会刷屏。" \
+            "> 修好后 CI 转绿，请**手动关闭**本 issue（CI 不自动关，避免「修了但没验证」被当成已解决）。")"
+          # 去重必须是「标题精确相等」，⛔ 不用 --search 模糊匹配：
+          # 模糊匹配下「CI 失败 · workflow_dispatch」会把「CI 失败（自测） · workflow_dispatch」
+          # 也搜出来（同为 CJK 词条 + 同一 event 名），真实故障的评论会写进自测 issue。
+          EXISTING="$(gh issue list --repo "$REPO" --state open --limit 200 --json number,title \
+            | jq -r --arg t "$TITLE" '.[] | select(.title == $t) | .number' | head -1)"
+          if [ -n "$EXISTING" ]; then
+            echo "复用已开 issue #$EXISTING"
+            gh issue comment "$EXISTING" --repo "$REPO" --body "$BODY"
+          else
+            echo "新开 issue"
+            gh issue create --repo "$REPO" --title "$TITLE" --body "$BODY"
+          fi

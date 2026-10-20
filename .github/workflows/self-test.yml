@@ -1,0 +1,46 @@
+name: CI 自测
+
+# 为什么单独一个 workflow：
+#   「验证失败通知真的会发」必须**故意制造一次红 run**。把它留在 ci.yml 里，
+#   每验证一次就在主 CI 历史上留一条红 —— 以后想判断"最近有没有真回归"，
+#   得先分辨哪条红是自测、哪条是真挂。⛔ 自测污染主历史＝把信号变成噪音。
+#
+# 这里跑红是**预期行为**，issue 标题也带「（自测）」与真实故障分开（去重互不干扰）。
+on:
+  workflow_dispatch:
+    inputs:
+      force_fail:
+        description: '故意失败以验证失败通知链路（默认 true；取消勾选＝空跑一次验证白名单）'
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  demo-check:
+    name: 自测（预期失败）
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: 故意失败
+        if: ${{ inputs.force_fail }}
+        run: |
+          echo "::error::这是自测：故意让本 workflow 失败，用来验证失败通知链路真的会发。CI 主流程（ci.yml）不受影响。"
+          exit 1
+
+      - name: 空跑（未勾 force_fail 时）
+        if: ${{ !inputs.force_fail }}
+        run: echo "未勾 force_fail ⇒ 只验证 workflow 本体能跑起来，不制造红 run。"
+
+  notify:
+    name: 失败通知（走与主 CI 同一份可复用逻辑）
+    needs: [demo-check]
+    if: failure()
+    permissions:
+      contents: read
+      issues: write
+    uses: ./.github/workflows/notify-issue.yml
+    with:
+      title: 'CI 失败（自测）'
+      source: 'self-test.yml 故意制造的失败，用于验证通知链路；验完请关闭 issue'
