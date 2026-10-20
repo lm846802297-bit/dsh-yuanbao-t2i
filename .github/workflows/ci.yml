@@ -1,10 +1,17 @@
 name: CI
 
-# 触发条件：推 master + 所有 PR
+# 触发条件：推 master + 所有 PR + 每天定时巡检 + 手动触发
 on:
   push:
     branches: [master]
   pull_request:
+  # 定时巡检：cron 一律按 UTC 算 ⇒ '0 3 * * 1' = 每周一 03:00 UTC = 北京时间 11:00
+  # 目的：外部依赖会漂（actions 大版本升级、npm 上游包变动、runner 镜像换批），
+  #      不推代码就不跑 CI ⇒ 真到要发版那天才发现红。
+  schedule:
+    - cron: '0 3 * * 1'
+  # 手动触发：Actions 页右上角「Run workflow」，用来验证定时那条链路是否还通
+  workflow_dispatch:
 
 # 只读权限，不碰仓库内容
 permissions:
