@@ -5,9 +5,14 @@
   python wm_lama.py --src <目录> --dst <目录> --roi x0,y0,x1,y1 [--mask rect|tight] [--device cuda]
 
 掩膜模式：
-  rect  （默认）ROI 整块白矩形交给 LaMa 重建 —— 最稳、但重修面积大，插画类会「糊一片」。
-  tight 在 ROI 内按「近白 + 低饱和」阈值检出字形，膨胀成紧贴字形的掩膜后再修 ——
-        重修面积小得多、痕更轻；白底/亮背景可能误遮，检出为空时自动回退 rect。
+  rect  ROI 整块白矩形交给 LaMa 重建 —— 最稳、但重修面积大，插画类会「糊一片」。
+  tight （插件默认）在 ROI 内检出字形，膨胀成紧贴字形的掩膜后再修 —— 重修面积小得多、痕更轻。
+
+    元宝水印是半透明白叠加：暗背景上是**亮笔画**，白背景上是**暗笔画**（只比纸暗 3-9 级）。
+    固定绝对阈值必然一头踩空（thr=185 在纯白图上命中 100%＝把整块背景当字形抹平），
+    所以 tight 默认走**自适应**：阈值由 ROI 自身亮度分布导出，两端都试，取命中面积更小的
+    那一端（白底图自动切暗笔画、暗底图自动切亮笔画）。仍可用 --thr/--sat/--dilate 显式覆盖。
+    两端命中面积都超过 ROI 的 60% ⇒ 判定「tight 不可信」，自动降级 rect 并打印原因。
 
 tight 的上下文：以掩膜外接框外扩 --ctx 像素裁切，只把这块送进模型，回填时按羽化掩膜混合，
 避免接缝。
@@ -30,7 +35,11 @@ def build_rect_mask(w, h, roi):
 
 
 def build_tight_mask(img, roi, thr, sat, dilate):
-    """在 ROI 内检出近白低饱和的字形像素，膨胀成掩膜。返回 (mask, 说明)。"""
+    """在 ROI 内检出字形像素，膨胀成掩膜。返回 (mask, 说明)。
+
+    thr=None 时走自适应：元宝水印是半透明白叠加，暗底上是亮笔画、白底上是暗笔画。
+    固定绝对阈值会一头踩空 ⇒ 阈值改由 ROI 自身亮度分布导出，两端都检，取命中面积小的一端。
+    """
     import numpy as np
     from PIL import Image, ImageFilter
 
@@ -42,9 +51,40 @@ def build_tight_mask(img, roi, thr, sat, dilate):
     sub = np.asarray(img.crop((x0, y0, x1, y1))).astype(np.int16)
     mx = sub.max(axis=2)
     mn = sub.min(axis=2)
-    glyph = ((mx > thr) & ((mx - mn) < sat)).astype(np.uint8) * 255
-    if glyph.sum() == 0:
-        return build_rect_mask(w, h, roi), f"ROI 内未检出字形（thr={thr} sat={sat}），回退 rect"
+    lowsat = (mx - mn) < sat
+
+    if thr is None:
+        # 自适应：两端各出一个候选掩膜，取命中面积更小的一端
+        lum = sub.mean(axis=2)
+        p_hi = float(np.percentile(lum, 99.5))
+        p_lo = float(np.percentile(lum, 0.5))
+        bright = ((lum > p_hi - 12) & lowsat).astype(np.uint8) * 255
+        dark = ((lum < p_lo + 12) & lowsat).astype(np.uint8) * 255
+        nb, nd = int((bright > 0).sum()), int((dark > 0).sum())
+        total = sub.shape[0] * sub.shape[1]
+        # 两端都糊掉大半 ⇒ ROI 里没有可分离的字形，别硬修
+        if nb > 0.6 * total and nd > 0.6 * total:
+            return build_rect_mask(w, h, roi), (
+                f"两端检出面积均超 ROI 60%（亮 {nb / total:.0%} / 暗 {nd / total:.0%}），"
+                "ROI 内无可分离字形，回退 rect"
+            )
+        if nd == 0 and nb == 0:
+            return build_rect_mask(w, h, roi), "自适应两端均未检出字形，回退 rect"
+        if nd < nb:
+            glyph, note = dark, f"暗笔画 p0.5+12={p_lo + 12:.0f} 命中 {nd / total:.1%}（亮端 {nb / total:.1%}）"
+        else:
+            glyph, note = bright, f"亮笔画 p99.5-12={p_hi - 12:.0f} 命中 {nb / total:.1%}（暗端 {nd / total:.1%}）"
+    else:
+        glyph = ((mx > thr) & lowsat).astype(np.uint8) * 255
+        if glyph.sum() == 0:
+            return build_rect_mask(w, h, roi), f"ROI 内未检出字形（thr={thr} sat={sat}），回退 rect"
+        total = sub.shape[0] * sub.shape[1]
+        if int((glyph > 0).sum()) > 0.6 * total:
+            return build_rect_mask(w, h, roi), (
+                f"固定阈值命中面积 {int((glyph > 0).sum()) / total:.0%} 超 ROI 60%"
+                "（疑似白底/亮背景误遮），回退 rect"
+            )
+        note = f"thr={thr} sat={sat}"
 
     mask = Image.fromarray(glyph)
     # PIL 的 MaxFilter 只吃小核，重复几次累计膨胀（9 核≈每边 +4px，7 次≈28px，够包住字边）
@@ -54,7 +94,7 @@ def build_tight_mask(img, roi, thr, sat, dilate):
             mask = mask.filter(ImageFilter.MaxFilter(9))
     full = Image.new("L", (w, h), 0)
     full.paste(mask, (x0, y0))
-    return full, f"字形掩膜 thr={thr} sat={sat} dilate≈{dilate}px"
+    return full, f"字形掩膜 {note} sat={sat} dilate≈{dilate}px"
 
 
 def main():
@@ -63,7 +103,7 @@ def main():
     ap.add_argument("--dst", required=True)
     ap.add_argument("--roi", required=True, help="x0,y0,x1,y1 相对比例")
     ap.add_argument("--mask", default="rect", choices=["rect", "tight"], help="掩膜模式")
-    ap.add_argument("--thr", type=int, default=185, help="tight：近白阈值（0-255）")
+    ap.add_argument("--thr", type=int, default=None, help="tight：近白阈值（0-255）；缺省＝按 ROI 亮度分布自适应")
     ap.add_argument("--sat", type=int, default=45, help="tight：最大通道差上限（越低越只认灰白）")
     ap.add_argument("--dilate", type=int, default=25, help="tight：掩膜膨胀半径（像素）")
     ap.add_argument("--ctx", type=int, default=160, help="tight：送模型的上下文外扩（像素）")
