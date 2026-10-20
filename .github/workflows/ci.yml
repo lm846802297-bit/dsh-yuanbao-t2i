@@ -71,6 +71,9 @@ jobs:
         run: node scripts/ci/probe-routes.cjs
 
       # 历史回归锁：7 条曾经真机踩过、而 lint/语法检查抓不到的静默失效
+      - name: Workflow structure gate (workflow 结构闸)
+        run: node scripts/ci/check-workflows.cjs
+
       - name: Regression locks (历史回归锁)
         run: node scripts/ci/check-regressions.cjs
 

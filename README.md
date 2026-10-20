@@ -325,13 +325,14 @@ IOPaint 的另两个主流模型都试通了，但都不比 `lama + tight` 好�
 | `check-syntax.cjs` | 全部 JS 过 `node --check`；去水印的 py 过 `py_compile` |
 | `probe-tools.cjs` | 工具注册探针：两个工具注册成功、参数 schema 合法、handler 可解析 |
 | `probe-routes.cjs` | 路由探针：设置读写重定向到临时目录（⛔ 不碰真实配置）、工具/路由挂载正确 |
+| `check-workflows.cjs` | workflow 结构闸：主 CI ⛔ 不许有「故意失败」开关、通知逻辑只允许一份实现、可复用 workflow ⛔ 不许被 push/PR 触发 |
 | `check-package.cjs` | 打包完整性：`files` / `exports` / `main` / `dsh.bundle.patch` 都真实存在；`package-lock.json` 版本必须与 `package.json` 一致 |
 | `check-regressions.cjs` | 历史回归锁：7 条**曾经真机踩过、而语法检查抓不到**的静默失效 |
 
 本地一条命令跑全：
 
 ```bash
-for f in check-syntax probe-tools probe-routes check-package check-regressions; do node scripts/ci/$f.cjs || break; done
+for f in check-syntax probe-tools probe-routes check-workflows check-package check-regressions; do node scripts/ci/$f.cjs || break; done
 ```
 
 ### 红了怎么知道（失败通知）
