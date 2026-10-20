@@ -3,7 +3,7 @@
 [![Release](https://img.shields.io/github/v/release/lm846802297-bit/dsh-yuanbao-t2i?label=release&color=blue)](https://github.com/lm846802297-bit/dsh-yuanbao-t2i/releases/latest)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-> 当前版本 **v0.6.1**（图生图 `refImages` 实测打通：参考图走元宝前端原生上传通道；修复 v0.6.0 的 SSE 解析回归；临时会话撞轮次上限会自动换新会话重试）
+> 当前版本 **v0.6.2**（修复图生图上传时弹出 Windows 系统「打开」文件框且不关闭的问题：改为先注册 `filechooser` 拦截再点「上传图片」，用 `chooser.setFiles()` 灌文件，不再弹系统框）
 
 [DSH](https://github.com/deepseek-ai)（DeepSeek Harness）本地插件：用**腾讯元宝网页版**（混元 Hy Image）**文生图 / 图生图**，一次 4 张 PNG 直接落盘，并可在插件设置卡里选择图片存到哪个目录（**v0.5.1 起支持点按钮选目录**，不用手敲长路径）、是否去水印、用哪个去水印引擎。
 
@@ -190,6 +190,7 @@ IOPaint 的另两个主流模型都试通了，但都不比 `lama + tight` 好�
 - **水彩 / 中灰背景图上 `tight` 可能漏字**（2026-10-20 实测）：元宝水印是半透明灰字，在中灰水彩底上与背景亮度差 < 15 灰度级且分布几乎完全重叠 ⇒ 逐像素阈值原理上不可分，掩膜可能整块落在背景纸纹上而水印文字残留。已试过 blackhat / 局部差 / adaptiveThreshold / 行投影+列峰等结构先验方案，16 张样本上均不能可靠定位文字行（暗底图文字区反差能量仅为背景的 1.5–2.3 倍，信号弱于纸纹）⇒ 未接入。遇到这类图请改用 `wmMask: "rect"`（整块重绘，不会漏字但重修面积大）。
 - **图生图已实测打通**（2026-10-20）：参考图走**元宝前端原生上传通道**（点「添加」→「上传图片」→ 前端动态创建的 `input[type=file]`），前端自己完成 `genUploadInfo` → COS PUT → `asyncFileParse`，发送时自动把 `multimedia[]` 填进 `/api/chat/` 请求体 ⇒ **不需要自己做签名**。实测产物与参考图灰度 NCC = **0.79–0.88**（同提示词纯文生图对照组仅 0.01–0.18）⇒ 参考图确实被采用。
   - ⛔ 曾尝试自研上传（`genUploadInfo` + HMAC-SHA1 + COS PUT + `TIMImageElem`）⇒ **失败**：元宝不认 `X-Token`/`X-ID`（那是 hermes-agent 的旧协议），实际要 `x-hy92`/`x-hy93`/`x-id` + 前端侧签名，逆无可逆。
+  - ✅ **v0.6.2 修复：上传时不再弹系统「打开」文件框**（2026-10-21）。前端那一步是真实的 `input.click()`，浏览器会弹 Windows 原生文件对话框；patchright 只有在存在 `filechooser` 监听器时才下发 `Page.setInterceptFileChooserDialog`（见 `patchright-core/lib/coreBundle.js` 的 `fileChooserIntercepted()`），没监听 ⇒ 不拦截 ⇒ 系统框弹出后无人关闭，会一直压在桌面上。现改为**先注册 `filechooser` 监听、再点「上传图片」、用 `chooser.setFiles()` 灌文件**（不再用 `locator.setInputFiles`，那是 CDP 直灌、关不掉已弹出的原生框）。实测对照：旧写法会弹 `title='打开'` 的系统框，新写法全程无系统框。
 - **临时会话轮次上限会自动重试**（2026-10-20）：元宝的 `chatMode=temp` 临时对话累积轮次后会返回 `code 21003`「当前对话已达到对话次数上限」。插件捕获该错误后**自动重新载入临时会话**（实测重新加载 `chatMode=temp` 会拿到新的 `conversationId` 且仍是临时对话，不落历史）并重发一次（参考图会重新上传）。连续两次都撞上限才报错。
 - LaMa 修复在白色背景 + 细纸纹图上仍可能留下轻微平滑痕——这也是「默认不去水印」的原因。
 
