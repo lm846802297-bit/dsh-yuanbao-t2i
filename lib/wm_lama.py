@@ -33,6 +33,17 @@ tight 的上下文：以掩膜外接框外扩 --ctx 像素裁切，只把这块�
 """
 import argparse
 import os
+import sys
+
+# ⚠️ 必须自己把 stdout/stderr 钉成 UTF-8，不能指望调用方设环境变量。
+#    中文 Windows 下 Python 子进程 stdout 默认 GBK，而本脚本日志里有 ⇒ / ＋ / ≈ 这类符号
+#    ⇒ `UnicodeEncodeError: 'gbk' codec can't encode character '\u21d2'` ⇒ 脚本 exit 1
+#    ⇒ 插件侧 `去水印失败（保留原图继续）`，用户拿到的还是带水印原图。
+#    这条是**真机实测**出来的：插件里 runPython 用 spawn 且未传 PYTHONIOENCODING。
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 # ── 水印几何／检测参数（集中在这里，便于回归与调参）────────────────────────────
 PRIOR_BOX = (0.60, 0.50, 0.98, 0.95)   # 水印必落在此框内（相对 ROI 的 x0,y0,x1,y1）

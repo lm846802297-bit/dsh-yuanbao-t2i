@@ -395,5 +395,65 @@ checker.check("plugin.js 的返回对象里 style 必须是「有才带」而不
   );
 });
 
+checker.step("⑪ wm_lama.py 的度量行必须真的转发到插件日志（否则「常驻读数」用户看不到）");
+checker.check("cleanWatermark 把 runPython 的 stdout 收下来并把 [wm_lama][metrics] 转发给 log()", () => {
+  const js = read("lib/plugin.js");
+  // ① 不许出现「把返回值丢掉」的裸语句形态（行首 await ... ）——那等于 stdout 直接被丢弃
+  const bareLines = js
+    .split(/\r?\n/)
+    .filter((l) => /^\s*await\s+runPython\s*\(/.test(l));
+  assert.equal(
+    bareLines.length,
+    0,
+    "plugin.js 里有 `await runPython(...)` 裸语句 —— runPython 只把子进程 stdout 收进局部变量 out，" +
+      `丢掉返回值 ⇒ wm_lama.py 打的 [wm_lama][metrics] 永远到不了插件日志：\n${bareLines.join("\n")}`,
+  );
+  // ② 必须把输出接住
+  assert.ok(
+    /const\s+pyOut\s*=\s*await\s+runPython\s*\(/.test(js),
+    "plugin.js 里找不到 `const pyOut = await runPython(...)` —— 子进程输出没被接住，度量行会丢",
+  );
+  // ③ 必须按行切（正则字面量，不是字面反斜杠 n —— 见锁 ③）并转发度量行
+  //    ⚠️ 找的是 "…includes(\"[wm_lama][metrics" 这种**不带右括号**的前缀匹配：
+  //    带 `]` 会漏掉 metrics-summary 行（④ 专门钉这个）。
+  const fwd = js
+    .split(/\r?\n/)
+    .filter((l) => l.includes("[wm_lama][metrics") && /log\s*\(/.test(l));
+  assert.ok(
+    fwd.length > 0,
+    "plugin.js 里没有把 [wm_lama][metrics… 转给 log(...) 的语句 —— 度量只活在子进程 stdout 里，用户看不到",
+  );
+  assert.ok(
+    /split\s*\(\s*\/\\r\?\\n\/\s*\)/.test(js),
+    "转发循环没有用正则字面量 split(/\\r?\\n/) 切行（用字符串切行会踩锁 ③ 的字面反斜杠 n 坑）",
+  );  // ④ 转发条件必须覆盖 metrics-summary（只匹配 "[wm_lama][metrics]" 带右括号会漏掉汇总行）
+  const cond = js
+    .split(/\r?\n/)
+    .find((l) => l.includes("includes(") && l.includes("[wm_lama][metrics"));
+  assert.ok(cond, "找不到转发条件那一行");
+  assert.ok(
+    !/includes\(\s*["'`]\[wm_lama\]\[metrics\]/.test(cond),
+    "转发条件写成 includes(\"[wm_lama][metrics]\")（带右括号）⇒ 会漏掉 [wm_lama][metrics-summary] 汇总行" +
+      "（真机实测漏过一次）：" + cond.trim(),
+  );
+
+  // ⑤ 子进程必须显式喂 UTF-8（中文 Windows 下 Python 默认 stdout=GBK，
+  //    日志里的 ⇒ 会抛 UnicodeEncodeError ⇒ 退出码 1 ⇒ 去水印整体失败，真机实测）
+  const spawnBlock = js.slice(js.indexOf("async function runPython"), js.indexOf("// 对本次生成的文件做去水印"));
+  assert.ok(spawnBlock, "找不到 runPython 函数体");
+  assert.ok(
+    /PYTHONIOENCODING\s*:\s*["']utf-8["']/.test(spawnBlock),
+    "runPython 的 spawn 没有传 PYTHONIOENCODING=utf-8 —— 中文 Windows 下子进程 stdout=GBK，" +
+      "日志里的 ⇒ 会抛 UnicodeEncodeError ⇒ 退出码 1 ⇒ 去水印整体失败（真机实测）",
+  );
+
+  // ⑥ wm_lama.py 自己也要 reconfigure（双保险：⛔ 别只留一侧）
+  const py2 = read("lib/wm_lama.py");
+  assert.ok(
+    /sys\.stdout\.reconfigure\(\s*encoding\s*=\s*["']utf-8["']/.test(py2),
+    "wm_lama.py 里没有 sys.stdout.reconfigure(encoding=\"utf-8\") —— 脚本自身不能兜住 GBK 环境",
+  );
+});
+
 console.log(`${C.dim("扫描文件：")}${SCAN_JS.join(", ")}`);
 process.exit(checker.finish());
