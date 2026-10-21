@@ -472,5 +472,44 @@ checker.check("cleanWatermark 把 runPython 的 stdout 收下来并把 [wm_lama]
   );
 });
 
+checker.step("⑫ count 必须与 files 等长（去水印部分成功时不许虚报张数）");
+checker.check("plugin.js 的 count 取 shownFiles.length，且不存在直传 r.count", () => {
+  const js = read("lib/plugin.js");
+  assert.ok(
+    /count:\s*shownFiles\.length/.test(js),
+    "plugin.js 返回里找不到 `count: shownFiles.length` —— count 与 files 可能不一致（去水印部分成功时虚报张数）",
+  );
+  assert.ok(
+    !/count:\s*r\.count\b/.test(js),
+    "plugin.js 返回里还有 `count: r.count` —— 去水印部分成功时「共 N 张」与 files 行数对不上",
+  );
+});
+
+checker.step("⑬ 下载落盘的扩展名必须按 content-type 映射（⛔ 不能只分 jpeg/其它）");
+checker.check("generate.js 用 extFromContentType，且下载处不再内联 jpeg 判断", () => {
+  const js = read("lib/generate.js");
+  assert.ok(/function\s+extFromContentType\s*\(/.test(js), "generate.js 里没有 extFromContentType 映射函数");
+  assert.ok(
+    /const\s+ext\s*=\s*extFromContentType\(\s*r\.headers\.get\(["']content-type["']\)\s*\)/.test(js),
+    "generate.js 下载处没有用 extFromContentType(...) —— image/webp 会被写成 .png（扩展名与内容不符）",
+  );
+  assert.ok(
+    !/\.includes\(\s*["']jpeg["']\s*\)\s*\?\s*["']jpg["']\s*:\s*["']png["']/.test(js),
+    "generate.js 里还留着「content-type 含 jpeg ? jpg : png」的内联判断",
+  );
+});
+
+checker.step("⑭ SSE pending 必须在点发送之前清空（否则首帧可能被清掉、白等超时）");
+checker.check("generate.js 里 pending.length = 0 出现在 await send.click() 之前", () => {
+  const js = read("lib/generate.js");
+  const clearIdx = js.indexOf("pending.length = 0;");
+  const clickIdx = js.indexOf("await send.click();");
+  assert.ok(clearIdx >= 0 && clickIdx >= 0, "generate.js 里找不到 pending.length = 0 / await send.click()");
+  assert.ok(
+    clearIdx < clickIdx,
+    "generate.js 里 `pending.length = 0` 在 `await send.click()` 之后 —— SSE 若在两者之间到达会被清空，结果丢失",
+  );
+});
+
 console.log(`${C.dim("扫描文件：")}${SCAN_JS.join(", ")}`);
 process.exit(checker.finish());

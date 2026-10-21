@@ -388,7 +388,7 @@ IOPaint 的另两个主流模型都试通了，但都不比 `lama + tight`（自
 | `probe-routes.cjs` | 路由探针：设置读写重定向到临时目录（⛔ 不碰真实配置）、工具/路由挂载正确 |
 | `check-workflows.cjs` | workflow 结构闸（9 条断言）：主 CI ⛔ 不许有「故意失败」开关、通知逻辑只允许一份实现、可复用 workflow ⛔ 不许被 push/PR 触发；**并且扫全部 workflow**——除 `self-test.yml`（唯一豁免）外，任何 workflow 的 `workflow_dispatch` 都不许带 `inputs`、不许有 `exit 非零` 的故意失败步骤（防「以后新加的 workflow 又把开关长回来」） |
 | `check-package.cjs` | 打包完整性：`files` / `exports` / `main` / `dsh.bundle.patch` 都真实存在；`package-lock.json` 版本必须与 `package.json` 一致 |
-| `check-regressions.cjs` | 历史回归锁：15 项断言 / 11 条**曾经真机踩过、而语法检查抓不到**的静默失效（⑧＝修复范围不得再回到公开面，⑨＝去水印检测口径不许退回旧 bug，⑩＝输出 schema 的 `style` 不许直传 `null`，⑪＝度量行必须转发进插件日志） |
+| `check-regressions.cjs` | 历史回归锁：18 项断言 / 11 条**曾经真机踩过、而语法检查抓不到**的静默失效（⑧＝修复范围不得再回到公开面，⑨＝去水印检测口径不许退回旧 bug，⑩＝输出 schema 的 `style` 不许直传 `null`，⑪＝度量行必须转发进插件日志） |
 | `probe-mask.cjs` → `test-mask-gates.py` | **掩膜检测闸门（真跑检测函数，不是静态扫描）**：28 条断言钉死「该降级时降级、该精确时精确」——纯白/纯噪声必须判「检测不可信」并降级 `rect`；合成水印必须走 `tight` 且命中率落可信带；**PRIOR_BOX 外的同款假水印必须检不出**（证明位置先验真的在约束）；`--thr` 旧分支仍可用；非法 ROI（`x0>x1`）不许崩；`area_stats` 的渗出统计不许写死 0；源码不许退回分位数口径。需要 `numpy`+`Pillow`：CI 里 `pip install` 后必跑；本地若没装会显式 **SKIP**（不假装绿），想本地也跑就设 `DSH_LAMA_PYTHON=<装了 numpy 的解释器>` |
 
 本地一条命令跑全：
