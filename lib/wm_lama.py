@@ -123,7 +123,7 @@ def build_tight_mask(img, roi, thr, sat, dilate):
     w, h = img.size
     x0, y0, x1, y1 = int(roi[0] * w), int(roi[1] * h), int(roi[2] * w), int(roi[3] * h)
     if x1 <= x0 or y1 <= y0:
-        return build_rect_mask(w, h, roi), "ROI 非法，回退 rect", {"ok": False, "hit": 0.0}
+        return build_rect_mask(w, h, roi), "ROI 非法，回退 rect", {"ok": False, "hit": 0.0, "why": "roi_invalid"}
 
     if thr is None:
         d = detect_glyph(img, roi, sat)
@@ -133,11 +133,11 @@ def build_tight_mask(img, roi, thr, sat, dilate):
         if hit < MIN_HIT:
             return build_rect_mask(w, h, roi), (
                 f"检测失效：命中仅 {hit:.2%} < {MIN_HIT:.1%} ⇒ 降级 rect（{detail}）"
-            ), {"ok": False, "hit": hit}
+            ), {"ok": False, "hit": hit, "why": "hit_low"}
         if hit > MAX_HIT:
             return build_rect_mask(w, h, roi), (
                 f"检测不可信：命中 {hit:.2%} > {MAX_HIT:.0%} ⇒ 降级 rect（{detail}）"
-            ), {"ok": False, "hit": hit}
+            ), {"ok": False, "hit": hit, "why": "hit_high"}
         glyph = d["glyph"].astype(np.uint8) * 255
         note = f"字形掩膜 {detail} sat={sat} dilate≈{dilate}px"
     else:
@@ -150,12 +150,12 @@ def build_tight_mask(img, roi, thr, sat, dilate):
         if nsel == 0:
             return build_rect_mask(w, h, roi), (
                 f"ROI 内未检出字形（thr={thr} sat={sat}），回退 rect"
-            ), {"ok": False, "hit": 0.0}
+            ), {"ok": False, "hit": 0.0, "why": "thr_empty"}
         hit = nsel / total
         if hit > 0.6:
             return build_rect_mask(w, h, roi), (
                 f"固定阈值命中面积 {hit:.0%} 超 ROI 60%（疑似白底/亮背景误遮），回退 rect"
-            ), {"ok": False, "hit": hit}
+            ), {"ok": False, "hit": hit, "why": "thr_toobig"}
         note = f"字形掩膜 thr={thr} sat={sat} 命中 {hit:.2%} dilate≈{dilate}px"
 
     mask = Image.fromarray(glyph)
@@ -166,7 +166,40 @@ def build_tight_mask(img, roi, thr, sat, dilate):
             mask = mask.filter(ImageFilter.MaxFilter(9))
     full = Image.new("L", (w, h), 0)
     full.paste(mask, (x0, y0))
-    return full, note, {"ok": True, "hit": hit}
+    return full, note, {"ok": True, "hit": hit, "why": ""}
+
+
+def area_stats(orig, out, roi, thr=6):
+    """度量「到底改了多少」：ROI 内改动面积占比、ROI 外改动像素数、全图平均绝对差。
+
+    为什么要运行时打印：v0.10.0 之前想知道掩膜是不是近空，只能事后另写脚本做 A/B；
+    做成常驻读数后，任何一张图的日志就能自证「走了哪条路、改了多少、有没有渗出 ROI」。
+
+    ROI 外改动**必须恒为 0**：tight 只回填「掩膜+上下文」那一块（块在 ROI 内），
+    rect 只重绘 ROI 矩形。一旦非 0，说明有整图重建的路径混进来了 —— 这个量比
+    「水印有没有修掉」更早暴露退化（整图重建会把画面洗平，而日志全绿）。
+    """
+    import numpy as np
+
+    w, h = orig.size
+    x0 = max(0, min(w - 1, int(round(float(roi[0]) * w))))
+    y0 = max(0, min(h - 1, int(round(float(roi[1]) * h))))
+    x1 = max(x0 + 1, min(w, int(round(float(roi[2]) * w))))
+    y1 = max(y0 + 1, min(h, int(round(float(roi[3]) * h))))
+    a = np.asarray(orig.convert("RGB")).astype(np.int16)
+    b = np.asarray(out.convert("RGB")).astype(np.int16)
+    if a.shape != b.shape:
+        return {"roi_pct": 100.0, "outside_px": -1, "mean_abs": -1.0, "box": (x0, y0, x1, y1)}
+    d = np.abs(a - b).max(axis=2)
+    inside = np.zeros(d.shape, dtype=bool)
+    inside[y0:y1, x0:x1] = True
+    sub = d[inside]
+    return {
+        "roi_pct": float((sub > thr).mean() * 100.0) if sub.size else 0.0,
+        "outside_px": int((d[~inside] > thr).sum()),
+        "mean_abs": float(d.mean()),
+        "box": (x0, y0, x1, y1),
+    }
 
 
 def repair_tight(lama, img, mask, ctx):
@@ -225,54 +258,99 @@ def main():
 
     exts = (".png", ".jpg", ".jpeg", ".webp")
     n = 0
+    used_hist = {"tight": 0, "rect": 0}
+    roi_pcts = []
+    outside_total = 0
+    degraded_n = 0
     for name in sorted(os.listdir(a.src)):
         if not name.lower().endswith(exts) or name.startswith("_"):
             continue
         img = Image.open(os.path.join(a.src, name)).convert("RGB")
         w, h = img.size
-        mode = a.mask
-        info = {"ok": False, "hit": 0.0}
+        requested = a.mask
+        used = None
+        degraded = ""
+        info = {"ok": False, "hit": 0.0, "why": ""}
         note = ""
 
-        if mode in ("auto", "tight"):
+        if requested in ("auto", "tight"):
             mask, note, info = build_tight_mask(img, roi, a.thr, a.sat, a.dilate)
             print(f"[wm_lama] {name}: {note}", flush=True)
-            if not info["ok"]:
-                if mode == "tight":
-                    print(f"[wm_lama] {name}: 强制 tight 但检测不可信，按 rect 处理", flush=True)
-                mode = "rect"
-        if mode == "rect":
+            if info["ok"]:
+                used = "tight"
+            else:
+                used = "rect"
+                degraded = info.get("why") or "untrusted"
+                if requested == "tight":
+                    print(f"[wm_lama] {name}: 强制 tight 但检测不可信（{degraded}），按 rect 处理",
+                          flush=True)
+        if used is None:
+            used = "rect"
+        if used == "rect":
             mask = build_rect_mask(w, h, roi)
 
         if not mask.getbbox():
             print(f"[wm_lama] {name}: 掩膜为空，回退 rect", flush=True)
             mask = build_rect_mask(w, h, roi)
-            mode = "rect"
+            used = "rect"
+            degraded = degraded or "empty_mask"
 
-        if mode == "tight":
+        if used == "tight":
             out = repair_tight(lama, img, mask, a.ctx)
             if out is None:
                 out = lama(img, build_rect_mask(w, h, roi)).convert("RGB").crop((0, 0, w, h))
+                used = "rect"
+                degraded = degraded or "empty_bbox"
         else:
             out = lama(img, mask)
             out = out.convert("RGB").crop((0, 0, w, h))
 
         # 残痕自检：用同一套检测跑一遍修好的图；还检得出笔画 ⇒ 没修净 ⇒ rect 兜底重修
+        resid_hit = -1.0
         if a.selfcheck == "1" and info["ok"] and info["hit"] > 0:
             resid = detect_glyph(out, roi, a.sat)
+            resid_hit = resid["hit"]
             alarm = max(SELF_CHECK_FLOOR, SELF_CHECK_RATIO * info["hit"])
             if resid["hit"] >= alarm:
                 print(f"[wm_lama] {name}: 残痕自检未过（残留 {resid['hit']:.2%} ≥ 阈值 "
                       f"{alarm:.2%}，原命中 {info['hit']:.2%}）⇒ 改用 rect 重修", flush=True)
                 out = lama(img, build_rect_mask(w, h, roi)).convert("RGB").crop((0, 0, w, h))
+                used = "rect"
+                degraded = degraded or "selfcheck"
                 note += f"＋自检未过（残留 {resid['hit']:.2%}）→rect 兜底"
             else:
                 note += f"＋自检通过（残留 {resid['hit']:.2%}）"
+
+        # 常驻度量：日志里自证「走了哪条路、改了多少、有没有渗出 ROI」
+        st = area_stats(img, out, roi)
+        used_hist[used] = used_hist.get(used, 0) + 1
+        if degraded:
+            degraded_n += 1
+        roi_pcts.append(st["roi_pct"])
+        if st["outside_px"] > 0:
+            outside_total += st["outside_px"]
+        print(
+            "[wm_lama][metrics] "
+            f"name={name} requested={requested} used={used} degraded={degraded or 'none'} "
+            f"hit={info['hit']:.4f} residual={resid_hit:.4f} "
+            f"roi_changed={st['roi_pct']:.2f} outside_px={st['outside_px']} "
+            f"mean_abs={st['mean_abs']:.2f}",
+            flush=True,
+        )
 
         stem = os.path.splitext(name)[0]
         out.save(os.path.join(a.dst, stem + ".png"))
         n += 1
         print(f"[wm_lama] {name} -> {stem}.png  [{note}]", flush=True)
+
+    if roi_pcts:
+        print(
+            "[wm_lama][metrics-summary] "
+            f"n={n} tight={used_hist.get('tight', 0)} rect={used_hist.get('rect', 0)} "
+            f"degraded={degraded_n} roi_changed_mean={sum(roi_pcts) / len(roi_pcts):.2f} "
+            f"roi_changed_max={max(roi_pcts):.2f} outside_px={outside_total}",
+            flush=True,
+        )
     print(f"[wm_lama] done {n}", flush=True)
     return 0
 

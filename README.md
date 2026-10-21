@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![CI](https://github.com/lm846802297-bit/dsh-yuanbao-t2i/actions/workflows/ci.yml/badge.svg)](https://github.com/lm846802297-bit/dsh-yuanbao-t2i/actions/workflows/ci.yml)
 
-> 当前版本 **v0.10.0**（⚡ **破坏性变更**：撤下 `wmMask`「修复范围」开关——掩膜改由插件**内部自适应**（`auto`，检出不可信时自动降级整块重绘），只留环境变量 `DSH_WM_MASK` 兜底。上一版 v0.9.0 移除 `seed` 参数——元宝协议层没有 seed 落点，留着只会让人以为能复现）
+> 当前版本 **v0.10.1**（新增**常驻度量日志**：每张图一行 `[wm_lama][metrics]`，写明走了哪条掩膜路径、命中率、残痕残留、ROI 改动面积、有没有渗出 ROI；并修掉「不带 `style` 调用会被判 invalid output」的输出 schema bug。上一版 v0.10.0 起⚡ **破坏性变更**：撤下 `wmMask`「修复范围」开关——掩膜改由插件**内部自适应**（`auto`，检出不可信时自动降级整块重绘），只留环境变量 `DSH_WM_MASK` 兜底。更早的 v0.9.0 移除 `seed` 参数——元宝协议层没有 seed 落点，留着只会让人以为能复现）
 
 > ⚡ **v0.9.0 破坏性变更：`seed` 参数已移除**。它本来就**没有任何作用**（只是把值原样回显），但如果你在脚本/提示里传了 `seed`，升级后会被**参数校验拒绝**（报未知参数）。**处理方式：把 `seed` 从调用里删掉即可**，其余参数与行为完全不变。
 
@@ -64,6 +64,29 @@
 - 命中率落在 `[MIN_HIT, MAX_HIT]`（`0.5%`–`25%`）之外 ⇒ `auto` 自动降级 `rect`；修完再用**同一套**检测跑一遍输出图做**残痕自检**（残留 ≥ `max(0.4%, 35%×原始命中)`）就用 `rect` 兜底重修。
 
 **v0.10.0 实测（20 张真样本）**：`auto` 无一张降级，ROI 改动面积**均值 9.41%**，而强制 `rect` 是 **54.07%**（少 5.7 倍）；肉眼复核水彩／木纹／带鸟的水彩三类：`auto` 水印消失且纹理完好，`rect` 整块糊掉。
+
+### 日志里的常驻度量（v0.10.1 起）
+
+去水印每张图都会打一行可机读的度量，**不用再另写脚本做 A/B**：
+
+```
+[wm_lama][metrics] name=yuanbao-...-0.png requested=auto used=tight degraded=none \
+  hit=0.0391 residual=0.0034 roi_changed=13.13 outside_px=0 mean_abs=0.11
+[wm_lama][metrics-summary] n=4 tight=4 rect=0 degraded=0 roi_changed_mean=12.40 \
+  roi_changed_max=19.06 outside_px=0
+```
+
+| 字段 | 含义 | 出问题时怎么看 |
+| --- | --- | --- |
+| `requested` / `used` | 请求的档（`auto`/`tight`/`rect`）与实际走的路径 | 两者不同＝发生了自动降级 |
+| `degraded` | 降级原因：`none` / `hit_low` / `hit_high` / `roi_invalid` / `empty_mask` / `empty_bbox` / `selfcheck` | 频繁出现 `hit_low` ⇒ 水印配色/位置变了，检测口径要重标定 |
+| `hit` | 字形命中率（占 ROI） | 想一眼判断「检测是否近空」——旧 bug 就是这里只有 0.07% 还照样往下走 |
+| `residual` | 残痕自检的残留率；`-1`＝没跑自检 | 逼近阈值（`max(0.4%, 35%×hit)`）说明修补不干净 |
+| `roi_changed` | ROI 内改动面积占比（`diff>6`） | 整块重绘路径通常 >50%，只修字形 5%–20%；数值突然变大＝退化 |
+| `outside_px` | ROI **外**改动像素数（正常恒 0） | **非 0 ＝有整图重建混进来了**，画面会被洗平 |
+| `mean_abs` | 全图平均绝对差 | 配合 `roi_changed` 看“改得狠不狠” |
+
+`outside_px` 是这里面最有用的一列：它比「水印有没有修掉」更早暴露退化——整图重建会把画面洗平，但日志和 CI 全绿，只有这个数会飙。
 
 ![auto vs rect 对比：4 张真样本各取水印区，左＝带水印原图，中＝auto，右＝强制 rect。auto 水印消失且纸纹/木纹/云都还在；rect 把整块洗平（第 2 行连鸟都糊掉了）](docs/wm-mask-auto-vs-rect.jpg)
 
@@ -341,8 +364,8 @@ IOPaint 的另两个主流模型都试通了，但都不比 `lama + tight`（自
 | `probe-routes.cjs` | 路由探针：设置读写重定向到临时目录（⛔ 不碰真实配置）、工具/路由挂载正确 |
 | `check-workflows.cjs` | workflow 结构闸（9 条断言）：主 CI ⛔ 不许有「故意失败」开关、通知逻辑只允许一份实现、可复用 workflow ⛔ 不许被 push/PR 触发；**并且扫全部 workflow**——除 `self-test.yml`（唯一豁免）外，任何 workflow 的 `workflow_dispatch` 都不许带 `inputs`、不许有 `exit 非零` 的故意失败步骤（防「以后新加的 workflow 又把开关长回来」） |
 | `check-package.cjs` | 打包完整性：`files` / `exports` / `main` / `dsh.bundle.patch` 都真实存在；`package-lock.json` 版本必须与 `package.json` 一致 |
-| `check-regressions.cjs` | 历史回归锁：13 项断言 / 9 条**曾经真机踩过、而语法检查抓不到**的静默失效（⑧ 起＝修复范围不得再回到公开面，⑨＝去水印检测口径不许退回旧 bug） |
-| `probe-mask.cjs` → `test-mask-gates.py` | **掩膜检测闸门（真跑检测函数，不是静态扫描）**：16 条断言钉死「该降级时降级、该精确时精确」——纯白/纯噪声必须判「检测不可信」并降级 `rect`；合成水印必须走 `tight` 且命中率落可信带；**PRIOR_BOX 外的同款假水印必须检不出**（证明位置先验真的在约束）；`--thr` 旧分支仍可用；非法 ROI（`x0>x1`）不许崩；源码不许退回分位数口径。需要 `numpy`+`Pillow`：CI 里 `pip install` 后必跑；本地若没装会显式 **SKIP**（不假装绿），想本地也跑就设 `DSH_LAMA_PYTHON=<装了 numpy 的解释器>` |
+| `check-regressions.cjs` | 历史回归锁：14 项断言 / 10 条**曾经真机踩过、而语法检查抓不到**的静默失效（⑧＝修复范围不得再回到公开面，⑨＝去水印检测口径不许退回旧 bug，⑩＝输出 schema 的 `style` 不许直传 `null`） |
+| `probe-mask.cjs` → `test-mask-gates.py` | **掩膜检测闸门（真跑检测函数，不是静态扫描）**：28 条断言钉死「该降级时降级、该精确时精确」——纯白/纯噪声必须判「检测不可信」并降级 `rect`；合成水印必须走 `tight` 且命中率落可信带；**PRIOR_BOX 外的同款假水印必须检不出**（证明位置先验真的在约束）；`--thr` 旧分支仍可用；非法 ROI（`x0>x1`）不许崩；`area_stats` 的渗出统计不许写死 0；源码不许退回分位数口径。需要 `numpy`+`Pillow`：CI 里 `pip install` 后必跑；本地若没装会显式 **SKIP**（不假装绿），想本地也跑就设 `DSH_LAMA_PYTHON=<装了 numpy 的解释器>` |
 
 本地一条命令跑全：
 
@@ -383,6 +406,8 @@ CI 挂了会**自动开一张 issue**（标题 `CI 失败 · <触发方式>`）�
 7. **禁止再引入 `seed` 参数** —— 元宝 `extra.image_gen_param` 只有 `model` / `ratio` / `resolution` 三个键，seed 永远不生效；留着只会让调用方误以为能锁种子（v0.9.0 已删）。
 8. **修复范围（`wmMask`）不得再回到公开面** —— ① 工具入参 schema 里不许有 `wmMask`；② 用户界面（`client.js`）里不许再出现该开关的字段或文案。v0.10.0 撤下它（改由引擎内部自适应，只留 `DSH_WM_MASK` 兜底）——这类「撤掉的开关」最容易被顺手加回来，加回来不报错、只会让用户重新背上一个没必要的选择，所以锁死在提交前。注意锁的射程：`lib/plugin.js` 内部**合法**保留 `wmMask`（交给去水印管线的字段），只有入参 schema 与界面才禁。
 9. **去水印检测口径不许退回旧 bug**（`lib/wm_lama.py` 静态判定）—— ① `--mask` 的 argparse 缺省值必须是 `auto` 且 `choices` 恰好是 `auto/rect/tight`（防有人只留 `rect` 悄悄退回整块重绘）；② 代码里不许再出现 `percentile` / `quantile` / `p99.5` / `p0.5`（旧 bug ＝分位数两端二选一，命中 0.07% 的空掩膜被当成「更干净」的那端）；③ 可信度闸 `MIN_HIT` / `MAX_HIT` 与残痕自检 `SELF_CHECK_RATIO` 三个常量必须都在且取值合理（`0 < v ≤ 1`、`MIN_HIT < MAX_HIT`），`--selfcheck` 缺省必须是 `1`（自检默认关＝静默放行残痕）。v0.10.0 把质量全部压在 `auto` 分支上，这类回归同样「语法合法、不报错，只是让图悄悄变糊」。
+
+10. **输出 schema 的 `style` 不许直传 `null`** —— `lib/plugin.js` 的返回对象里必须写成 `...(r.style ? { style: r.style } : {})`（有才带），不许 `style: r.style` 裸直传。原因：不传画风时 `r.style` 是 `null`，而输出 schema 把 `style` 声明为 `object` ⇒ 宿主判 `returned invalid output: "value.style" must be an object`，**调用方拿不到结果**（图其实已经落盘了）。这类 bug 语法合法、`node --check` 全绿、探针也只验 schema 声明不验返回值 ⇒ 只能靠这条锁。
 
 > 每个检查器都做过**阳性对照**：把对应 bug 注入一份仓库副本，确认它会变红。不做这步，恒绿的检查器等于没有。
 

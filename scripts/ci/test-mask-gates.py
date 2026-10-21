@@ -162,6 +162,49 @@ def main():
     for name in ("MIN_HIT", "MAX_HIT", "SELF_CHECK_RATIO", "PRIOR_BOX", "MED_K"):
         check(f"常量 {name} 存在", hasattr(wm, name))
 
+    # ── 10. 常驻度量 area_stats：ROI 内改动面积 / 渗出 ROI 的像素数
+    #    为什么要测：v0.10.1 起每次去水印都打一行 [metrics]。这些数就是"以后回归不用再手写
+    #    A/B 脚本"的依据；一旦 area_stats 算错，日志会自证"改了 0%"而实际整块糊掉。
+    from PIL import Image as _Image, ImageDraw as _ImageDraw
+    base = _Image.new("RGB", SZ, (200, 200, 200))
+    same = base.copy()
+    st_same = wm.area_stats(base, same, ROI)
+    check("area_stats 同图 ⇒ 改动 0% 且渗出 0", st_same["roi_pct"] == 0.0 and st_same["outside_px"] == 0,
+          f"roi_pct={st_same['roi_pct']:.2f} outside={st_same['outside_px']}")
+
+    # ROI 内整块变白 ⇒ ROI 改动接近 100%，渗出仍为 0
+    roi_only = base.copy()
+    w_, h_ = roi_only.size
+    _ImageDraw.Draw(roi_only).rectangle(
+        [int(ROI[0] * w_), int(ROI[1] * h_), int(ROI[2] * w_) - 1, int(ROI[3] * h_) - 1],
+        fill=(255, 255, 255),
+    )
+    st_roi = wm.area_stats(base, roi_only, ROI)
+    check("area_stats ROI 全改 ⇒ 改动>95% 渗出=0",
+          st_roi["roi_pct"] > 95.0 and st_roi["outside_px"] == 0,
+          f"roi_pct={st_roi['roi_pct']:.2f} outside={st_roi['outside_px']}")
+
+    # 整图变白 ⇒ 必须报出渗出（这条专门抓"整图重建"混进 tight 路径）
+    full_white = _Image.new("RGB", SZ, (255, 255, 255))
+    st_full = wm.area_stats(base, full_white, ROI)
+    check("area_stats 整图重建 ⇒ 渗出>0（抓整图重建混入）", st_full["outside_px"] > 0,
+          f"outside={st_full['outside_px']}")
+
+    # 尺寸不一致（LaMa 输出未裁回）⇒ 必须显式报 -1，而不是静默当 0
+    odd = _Image.new("RGB", (SZ[0] + 8, SZ[1] + 8), (200, 200, 200))
+    st_odd = wm.area_stats(base, odd, ROI)
+    check("area_stats 尺寸不一致 ⇒ 标记异常(-1)", st_odd["outside_px"] == -1 and st_odd["roi_pct"] == 100.0,
+          f"outside={st_odd['outside_px']} roi_pct={st_odd['roi_pct']:.0f}")
+
+    # ── 11. 每图必须打常驻度量行（含 requested/used/degraded/roi_changed/outside_px）
+    for token in ("[wm_lama][metrics]", "[wm_lama][metrics-summary]",
+                  "requested=", "used=", "degraded=", "roi_changed=", "outside_px="):
+        check(f"度量行含 {token}", token in raw)
+
+    # ── 12. 降级原因必须带 why 标记（日志才分得清「命中太低」还是「自检没过」）
+    for why in ("hit_low", "hit_high", "roi_invalid", "selfcheck", "empty_mask"):
+        check(f"降级原因 {why} 在源码中可追踪", why in code)
+
     print()
     if fails:
         print(f"掩膜闸门：{len(fails)} 项 FAIL → {fails}")

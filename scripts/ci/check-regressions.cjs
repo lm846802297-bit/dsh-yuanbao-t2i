@@ -21,6 +21,7 @@
 //   ⑦ 禁止再引入永久无效的 seed 参数（协议层 extra.image_gen_param 根本没有 seed 落点）。
 //   ⑧ 修复范围（wmMask）不得再回到公开面：入参 schema 不许有、client.js 界面不许出现
 //      → v0.10.0 撤掉该用户开关（改内部自适应 auto + DSH_WM_MASK 兜底），撤了就锁住。
+//   ⑩ 输出 schema 里的 style 不许直传 null（无画风调用会被宿主判 invalid output）
 //   ⑨ wm_lama 检测口径不许退回旧 bug：--mask 缺省 auto 且三档都在、代码里没有分位数检测
 //      （percentile / p99.5 / p0.5）、可信度闸与残痕自检常量都在
 //      → 去水印质量全压在 auto 分支上，这类回归语法合法、只是让图悄悄变糊。
@@ -214,7 +215,14 @@ checker.check("catch 分支里给 watermarkError 赋值，且返回值带上它"
   // 必须落在 catch 块里，否则去水印失败时调用方拿不到任何信号。
   const inCatch = /catch\s*\([^)]*\)\s*\{[^}]*watermarkError\s*=/.test(src);
   assert.ok(inCatch, "没有在 catch 分支里给 watermarkError 赋值 ⇒ 去水印失败静默无信号");
-  assert.ok(/return\s*\{[^}]*watermarkError\s*\}/.test(src), "watermarkError 没有被返回给调用方");
+  // ⚠️ ⛔ 别用 /return\s*\{[^}]*watermarkError/ —— 返回值里一旦出现嵌套花括号
+  //    （例如 `...(cond ? { style } : {})`），[^}]* 会在内层 } 处停住 ⇒ 假红。
+  //    改成按行取「以 return { 开头」的语句，只要该行带上 watermarkError 就算带出。
+  const retLine = src
+    .split(/\r?\n/)
+    .filter((line) => /return\s*\{/.test(line))
+    .find((line) => /watermarkError\b/.test(line));
+  assert.ok(retLine, "watermarkError 没有被返回给调用方");
 });
 
 checker.step("⑦ 禁止再引入永久无效的 seed 参数");
@@ -357,6 +365,34 @@ checker.check("可信度闸（MIN_HIT / MAX_HIT / SELF_CHECK_RATIO）与残痕�
   const sc = pyArgCall(py, "--selfcheck");
   assert.ok(sc, "wm_lama.py 里找不到 --selfcheck 参数 —— 残痕自检的开关被删了");
   assert.ok(/default\s*=\s*["']1["']/.test(sc), `--selfcheck 的缺省值不是 "1"（自检默认关＝静默放行残痕）：${sc.trim()}`);
+});
+
+checker.step("⑩ 输出 schema 的 style 不许直传 null（无画风调用会被宿主判 invalid output）");
+checker.check("plugin.js 的返回对象里 style 必须是「有才带」而不是直传 r.style", () => {
+  const js = read("lib/plugin.js");
+  // ① 禁止未加保护的直传形态（这是真事故写法）
+  // 先把「受保护的写法」整段摘掉，再找裸直传（否则保护形态自己会被判红）
+  const guarded = /\.\.\.\s*\(\s*r\.style\s*\?\s*\{\s*style:\s*r\.style\s*\}\s*:\s*\{\s*\}\s*\)/g;
+  const bare = js.replace(guarded, "/* guarded */");
+  const bad = /\bstyle:\s*r\.style\b/.exec(bare);
+  assert.ok(
+    !bad,
+    "plugin.js 里出现 `style: r.style` 直传 —— r.style 在「不传 style 参数」时是 null，" +
+      "而输出 schema 把 style 声明为 object ⇒ 宿主会判 returned invalid output，" +
+      "调用方拿不到结果（图已落盘却报错，v0.10.0 真机实测）。正解：...(r.style ? { style: r.style } : {})",
+  );
+  // ② 必须存在「有才带」的保护形态（防止有人直接删掉 style 输出，画风信息丢失）
+  assert.ok(
+    /\.\.\.\s*\(\s*r\.style\s*\?\s*\{\s*style:\s*r\.style\s*\}\s*:\s*\{\s*\}\s*\)/.test(js),
+    "plugin.js 里找不到 `...(r.style ? { style: r.style } : {})` —— 要么被改回直传，要么 style 输出整块丢了",
+  );
+  // ③ schema 里 style 不得进 required（缺 style 必须是合法返回）
+  const req = /required:\s*\[([^\]]*)\]/.exec(js);
+  assert.ok(req, "plugin.js 里找不到输出 schema 的 required 列表");
+  assert.ok(
+    !/[\"']style[\"']/.test(req[1]),
+    `输出 schema 把 style 写进了 required（${req[1].trim()}）—— 不传画风的调用会被判缺字段`,
+  );
 });
 
 console.log(`${C.dim("扫描文件：")}${SCAN_JS.join(", ")}`);
