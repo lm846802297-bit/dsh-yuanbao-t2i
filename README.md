@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![CI](https://github.com/lm846802297-bit/dsh-yuanbao-t2i/actions/workflows/ci.yml/badge.svg)](https://github.com/lm846802297-bit/dsh-yuanbao-t2i/actions/workflows/ci.yml)
 
-> 当前版本 **v0.10.2**（**常驻度量日志**原来只打在 `wm_lama.py` 的 stdout 上、被插件整体丢弃 —— 用户看不到；v0.10.2 把它转发进插件日志。v0.10.1 新增**常驻度量日志**：每张图一行 `[wm_lama][metrics]`，写明走了哪条掩膜路径、命中率、残痕残留、ROI 改动面积、有没有渗出 ROI；并修掉「不带 `style` 调用会被判 invalid output」的输出 schema bug。上一版 v0.10.0 起⚡ **破坏性变更**：撤下 `wmMask`「修复范围」开关——掩膜改由插件**内部自适应**（`auto`，检出不可信时自动降级整块重绘），只留环境变量 `DSH_WM_MASK` 兜底。更早的 v0.9.0 移除 `seed` 参数——元宝协议层没有 seed 落点，留着只会让人以为能复现）
+> 当前版本 **v0.10.3**（**订正生效方式**：改 `lib/*.js` 必须**重启 DSH Desktop** —— 宿主侧是 ESM 模块、进 Node 模块缓存，Settings → Plugins 里关掉再打开**换不掉**已 import 的代码；真机实测过「重载后 style 仍报错、但 wm_lama.py 的修复已生效」这种一半生效的迷惑现象。v0.10.2 修了**常驻度量日志**原来只打在 `wm_lama.py` 的 stdout 上、被插件整体丢弃 —— 用户看不到；v0.10.2 把它转发进插件日志。v0.10.1 新增**常驻度量日志**：每张图一行 `[wm_lama][metrics]`，写明走了哪条掩膜路径、命中率、残痕残留、ROI 改动面积、有没有渗出 ROI；并修掉「不带 `style` 调用会被判 invalid output」的输出 schema bug。上一版 v0.10.0 起⚡ **破坏性变更**：撤下 `wmMask`「修复范围」开关——掩膜改由插件**内部自适应**（`auto`，检出不可信时自动降级整块重绘），只留环境变量 `DSH_WM_MASK` 兜底。更早的 v0.9.0 移除 `seed` 参数——元宝协议层没有 seed 落点，留着只会让人以为能复现）
 
 > ⚡ **v0.9.0 破坏性变更：`seed` 参数已移除**。它本来就**没有任何作用**（只是把值原样回显），但如果你在脚本/提示里传了 `seed`，升级后会被**参数校验拒绝**（报未知参数）。**处理方式：把 `seed` 从调用里删掉即可**，其余参数与行为完全不变。
 
@@ -137,7 +137,7 @@
    ```
 4. 把包链接进 profile 的 `node_modules`（Windows 可用 junction）：
    `mklink /J node_modules\dsh-yuanbao-t2i ..\vendor\yuanbao-t2i`
-5. 重启 DSH Desktop（或在 Settings → Plugins 里把本插件关掉再打开）让它加载新的宿主半和浏览器半。
+5. **重启 DSH Desktop**（完全退出再启动）让它加载新的宿主半与浏览器半 —— ⚠️ Settings → Plugins 里关掉再打开**换不掉**已 import 的 `lib/*.js`（原因见「升级已有安装」一节的对照表）。
 
 > 💡 **v0.5.1 起新增**：设置卡里「输出目录」旁边多了个**「选择目录…」**按钮，点一下弹 Windows 文件夹选择器，选完自动填进输入框（详见下文「插件界面（设置卡）」）。升级到 v0.5.1 只需 `git pull` + `npm install` + 重载 DSH，老配置文件完全兼容。
 
@@ -151,7 +151,16 @@ git pull
 npm install
 ```
 
-然后在 DSH 里**重载插件**（Settings → Plugins 里把本插件关掉再打开，或重启 DSH Desktop）即可生效 —— profile 的 `node_modules/dsh-yuanbao-t2i` 是指向 `vendor/yuanbao-t2i` 的链接/junction，代码改动即时可见，只有**依赖变化**才需要重跑 `npm install`。
+然后在 DSH 里让它生效 —— ⚠️ **生效方式取决于你改了哪一半，三者不同**：
+
+| 改了什么 | 怎么生效 | 为什么 |
+| --- | --- | --- |
+| `lib/plugin.js` / `lib/generate.js` / `lib/settings.js` 等**宿主半** | 🔴 **必须重启 DSH Desktop**（完全退出再启动） | 宿主侧是 ESM 模块，**启动时 import 一次就进 Node 模块缓存**；`cordis-plugin-loader` 的 `import()` 没有 cache-bust，`dsh-hmr` 只 watch `cordis.patch.yml` + `package.json`，**不 watch 插件 `lib/*.js`**。宿主自己也提示 `changed modules keep running their previous code until a restart` —— 所以 **Settings → Plugins 里关掉再打开**换不掉已经 import 的 `plugin.js`。 |
+| `lib/wm_lama.py`（去水印脚本） | 立即生效，**无需任何重载** | 每次去水印都 `spawn` 一个**新的 python 进程** |
+| `client.js`（设置卡界面） | 刷新页面（Ctrl+R） | 浏览器侧 bundle |
+
+> 📌 实践中最省事的做法：**只要动过 `lib/*.js` 就重启 DSH Desktop**。profile 的 `node_modules/dsh-yuanbao-t2i` 是指向 `vendor/yuanbao-t2i` 的链接/junction，代码改动本身即时可见，只有**依赖变化**才需要重跑 `npm install`。
+
 
 > ⚡ **v0.9.0 用户必读**：`seed` 参数已删除（协议层无落点，见「已知限制」）。调用里带 `seed` 会报未知参数，删掉即可。
 > 🚨 **v0.6.0 用户必读**：v0.6.0 的取图有回归（`bodyText.split("\\n")` 写成了字面反斜杠），**SSE 解析恒为 0 张** —— 调用「成功」但一张图都拿不到。请升到 **v0.6.2**（v0.6.1 修了取图，v0.6.2 修了上传时弹系统「打开」文件框不关闭）。
