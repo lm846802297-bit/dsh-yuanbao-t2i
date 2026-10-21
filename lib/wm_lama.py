@@ -52,8 +52,18 @@ MAD_MULT = 2.5
 MAD_FLOOR = 6.0
 MIN_HIT = 0.005                        # 命中率下限（占 ROI），低于此判「检测失效」
 MAX_HIT = 0.25                         # 命中率上限，高于此判「把背景当字形」
-SELF_CHECK_RATIO = 0.35                # 残痕自检：残留 / 原始命中 超过此比例 ⇒ 判没修净
+SELF_CHECK_RATIO = 0.35                # 残痕自检：残留 / 原始命中 超过此比例 ⇒ 先当「可疑」
 SELF_CHECK_FLOOR = 0.004
+# 残痕自检的**形态判据（二维，v0.10.4）**：光看像素量会把修复纹理当成残留水印。
+#   一维（只看像素量）实测会误判：某张图 tight 修完 blob=1.425% ≥ 1.4%，但肉眼完全干净
+#   —— 那是一块**竖向连片纹理**（aspect 0.47），不是字。
+#   二维实测（17 例真样本）：
+#     真字形   blob 1.88–3.07%ROI ｜ aspect 1.48–2.41（横向文字块）
+#     干净后   blob 0.003–1.43%   ｜ aspect 0.38–1.65
+#   ⇒ 取 blob ≥1.4% **且** aspect ≥1.3 ⇒ 17/17 全对（一维是 16/17）。
+#   两个条件都必须满足才算「像字」；任一不满足 ⇒ 判修复纹理 ⇒ ⛔ 不降级（避免白糊一大片）。
+GLYPH_PIXELS = 0.014                   # 最大连通域 ≥ ROI 面积的 1.4%
+GLYPH_ASPECT = 1.30                    # 且该连通域长宽比 ≥ 1.3（字是横向块，竖向连片多是纹理）
 
 
 def build_rect_mask(w, h, roi):
@@ -212,6 +222,58 @@ def area_stats(orig, out, roi, thr=6):
         "box": (x0, y0, x1, y1),
     }
 
+def largest_blob_shape(mask):
+    """最大 8-连通域的 (面积/ROI面积, 长宽比) —— 「像不像字」的二维形态判据（v0.10.4）。
+
+    为什么不用「最大块 / 检出像素总数」：实测该比值在真字形（54–99%）与修复噪点
+    （2–79%）之间**重叠**，不可分。归一化到 ROI 面积才分得开——噪点总量本身很小，
+    比值会被分母放大；ROI 面积与图案无关，是稳定基准。
+
+    为什么还要长宽比：单看面积仍有一次误判（一块竖向连片纹理 blob=1.425% 但肉眼干净）。
+    元宝水印是**横向**文字块（「元宝」在上、「AI生成」在下，整块 aspect 1.5–2.4），
+    竖向拉长的连通域基本是画面纹理/修复痕。
+
+    纯 numpy + deque 实现，不引入 scipy（去水印环境只保证 numpy+Pillow）。
+    """
+    import numpy as np
+    from collections import deque
+
+    m = np.asarray(mask, dtype=bool)
+    if not m.any():
+        return 0.0, 0.0
+    H, W = m.shape
+    seen = np.zeros((H, W), dtype=bool)
+    best = (0, 0, 0)          # area, bw, bh
+    ys, xs = np.nonzero(m)
+    for y0, x0 in zip(ys.tolist(), xs.tolist()):
+        if seen[y0, x0]:
+            continue
+        seen[y0, x0] = True
+        q = deque([(y0, x0)])
+        area = 0
+        minx = maxx = x0
+        miny = maxy = y0
+        while q:
+            y, x = q.popleft()
+            area += 1
+            if x < minx: minx = x
+            if x > maxx: maxx = x
+            if y < miny: miny = y
+            if y > maxy: maxy = y
+            for dy in (-1, 0, 1):
+                for dx in (-1, 0, 1):
+                    if dy or dx:
+                        ny, nx = y + dy, x + dx
+                        if 0 <= ny < H and 0 <= nx < W and m[ny, nx] and not seen[ny, nx]:
+                            seen[ny, nx] = True
+                            q.append((ny, nx))
+        if area > best[0]:
+            best = (area, maxx - minx + 1, maxy - miny + 1)
+    area, bw, bh = best
+    aspect = (bw / float(bh)) if bh else 0.0
+    return area / float(H * W), aspect
+
+
 
 def repair_tight(lama, img, mask, ctx):
     """tight 路径：只把「掩膜 + 上下文」这一块送模型，回填时按羽化掩膜混合，避免整图重建。"""
@@ -322,15 +384,30 @@ def main():
             resid = detect_glyph(out, roi, a.sat)
             resid_hit = resid["hit"]
             alarm = max(SELF_CHECK_FLOOR, SELF_CHECK_RATIO * info["hit"])
+            # 形态闸：像素量达标只是「可疑」，还得「看起来像字」才真的降级。
+            # v0.10.3 及以前只看像素量 ⇒ 修复噪点（均匀碎点）也会触发，白糊 40% ROI 却没换来更干净。
             if resid["hit"] >= alarm:
+                blob, aspect = largest_blob_shape(resid["glyph"])
+            else:
+                blob, aspect = 0.0, 0.0
+            looks_like_glyph = (blob >= GLYPH_PIXELS) and (aspect >= GLYPH_ASPECT)
+            if resid["hit"] >= alarm and not looks_like_glyph:
+                print(f"[wm_lama] {name}: 自检残留 {resid['hit']:.2%} 超量阈值，但形态不像字"
+                      f"（最大连通域占 ROI {blob:.2%} / 长宽比 {aspect:.2f}；"
+                      f"门槛 {GLYPH_PIXELS:.1%} / {GLYPH_ASPECT:.1f}）"
+                      f"⇒ 判定为修复纹理，⛔ 不降级 rect（避免白糊一大片）", flush=True)
+            if resid["hit"] >= alarm and looks_like_glyph:
                 print(f"[wm_lama] {name}: 残痕自检未过（残留 {resid['hit']:.2%} ≥ 阈值 "
-                      f"{alarm:.2%}，原命中 {info['hit']:.2%}）⇒ 改用 rect 重修", flush=True)
+                      f"{alarm:.2%}，且形态像字：最大块 {blob:.2%} ROI ≥ {GLYPH_PIXELS:.1%}，"
+                      f"长宽比 {aspect:.2f} ≥ {GLYPH_ASPECT:.1f}；"
+                      f"原命中 {info['hit']:.2%}）⇒ 改用 rect 重修", flush=True)
                 out = lama(img, build_rect_mask(w, h, roi)).convert("RGB").crop((0, 0, w, h))
                 used = "rect"
                 degraded = degraded or "selfcheck"
                 note += f"＋自检未过（残留 {resid['hit']:.2%}）→rect 兜底"
             else:
-                note += f"＋自检通过（残留 {resid['hit']:.2%}）"
+                note += (f"＋自检通过（残留 {resid['hit']:.2%}，最大块 {blob:.2%} ROI"
+                         f" / 长宽比 {aspect:.2f}）")
 
         # 常驻度量：日志里自证「走了哪条路、改了多少、有没有渗出 ROI」
         st = area_stats(img, out, roi)

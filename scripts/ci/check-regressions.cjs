@@ -362,6 +362,23 @@ checker.check("可信度闸（MIN_HIT / MAX_HIT / SELF_CHECK_RATIO）与残痕�
   const minHit = Number(/^\s*MIN_HIT\s*=\s*([0-9.]+)/m.exec(py)[1]);
   const maxHit = Number(/^\s*MAX_HIT\s*=\s*([0-9.]+)/m.exec(py)[1]);
   assert.ok(minHit < maxHit, `MIN_HIT(${minHit}) 必须小于 MAX_HIT(${maxHit})，否则区间为空、auto 恒降级`);
+  // 形态判据（v0.10.4）：光有「像素量阈值」会把修复纹理当残留 ⇒ 白降级 rect。
+  // 真机实测 2/8 张中招（多糊 40–70% ROI 却没更干净）⇒ 两个维度都得在。
+  for (const name of ["GLYPH_PIXELS", "GLYPH_ASPECT"]) {
+    const m = new RegExp(`^\\s*${name}\\s*=\\s*([0-9.]+)`, "m").exec(py);
+    assert.ok(m, `wm_lama.py 缺少常量 ${name} —— 残痕自检的形态判据被删了（只看像素量会误降级）`);
+    assert.ok(Number(m[1]) > 0, `${name} = ${m[1]} 必须 > 0`);
+  }
+  assert.ok(
+    /blob\s*>=\s*GLYPH_PIXELS/.test(py) && /aspect\s*>=\s*GLYPH_ASPECT/.test(py),
+    "残痕自检没有同时用 blob 与 aspect 两个条件 —— 退回一维会被修复噪点误触发，" +
+      "白降级 rect 糊掉一大片（真机实测 2/8 张）",
+  );
+  assert.ok(
+    /def\s+largest_blob_shape\s*\(/.test(py),
+    "wm_lama.py 缺少 largest_blob_shape() —— 形态度量函数被删了",
+  );
+
   const sc = pyArgCall(py, "--selfcheck");
   assert.ok(sc, "wm_lama.py 里找不到 --selfcheck 参数 —— 残痕自检的开关被删了");
   assert.ok(/default\s*=\s*["']1["']/.test(sc), `--selfcheck 的缺省值不是 "1"（自检默认关＝静默放行残痕）：${sc.trim()}`);

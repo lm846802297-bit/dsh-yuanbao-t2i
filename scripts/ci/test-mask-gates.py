@@ -205,6 +205,56 @@ def main():
     for why in ("hit_low", "hit_high", "roi_invalid", "selfcheck", "empty_mask"):
         check(f"降级原因 {why} 在源码中可追踪", why in code)
 
+    # ── 13. 残痕自检的**二维形态判据**（v0.10.4）
+    #     为什么测：v0.10.3 及以前只看「残留像素量」，把 LaMa 修复后的纹理噪点当成残留水印
+    #     ⇒ 白降级 rect、糊掉 40–70% 的 ROI 却没换来更干净（真机实测 2/8 张中招）。
+    #     v0.10.4 加二维形态闸（blob%ROI + 长宽比），只有「看起来像字」才降级。
+    check("常量 GLYPH_PIXELS / GLYPH_ASPECT 存在且有合理取值",
+          getattr(wm, "GLYPH_PIXELS", None) is not None
+          and getattr(wm, "GLYPH_ASPECT", None) is not None
+          and 0.001 < wm.GLYPH_PIXELS < 0.2
+          and 0.5 < wm.GLYPH_ASPECT < 5.0,
+          "GLYPH_PIXELS=%r GLYPH_ASPECT=%r" % (getattr(wm, "GLYPH_PIXELS", None),
+                                              getattr(wm, "GLYPH_ASPECT", None)))
+
+    check("largest_blob_shape 返回 (面积占比, 长宽比)", callable(getattr(wm, "largest_blob_shape", None)))
+
+    if hasattr(wm, "largest_blob_shape"):
+        import numpy as _np
+        canvas = _np.zeros((100, 200), dtype=bool)
+        # 造一个「横向文字块」：40×80 的实心块 ⇒ blob=16% / aspect=2.0 ⇒ 像字
+        canvas[20:60, 40:120] = True
+        blob, aspect = wm.largest_blob_shape(canvas)
+        check("横向块被判像字（blob≥1.4%, 长宽比≥1.3）",
+              blob >= wm.GLYPH_PIXELS and aspect >= wm.GLYPH_ASPECT,
+              "blob=%.3f aspect=%.2f" % (blob, aspect))
+
+        # 造一个「竖向细条」：面积一样但 aspect 很小 ⇒ 不该像字（正是真机误降级那类）
+        tall = _np.zeros((100, 200), dtype=bool)
+        tall[10:70, 100:108] = True          # 8×60 ⇒ aspect 0.13
+        blob2, aspect2 = wm.largest_blob_shape(tall)
+        check("竖向连片被判不像字（长宽比不足）",
+              not (blob2 >= wm.GLYPH_PIXELS and aspect2 >= wm.GLYPH_ASPECT),
+              "blob=%.3f aspect=%.2f" % (blob2, aspect2))
+
+        # 造一堆均匀碎点：面积够但每块都小 ⇒ 最大块占比低 ⇒ 不像字
+        speck = _np.zeros((100, 200), dtype=bool)
+        for yy in range(10, 90, 8):
+            for xx in range(10, 190, 8):
+                speck[yy:yy + 3, xx:xx + 3] = True
+        blob3, aspect3 = wm.largest_blob_shape(speck)
+        check("均匀碎点被判不像字（最大块太小）",
+              not (blob3 >= wm.GLYPH_PIXELS and aspect3 >= wm.GLYPH_ASPECT),
+              "blob=%.3f aspect=%.2f" % (blob3, aspect3))
+
+        check("空掩膜返回 (0, 0) 不崩",
+              wm.largest_blob_shape(_np.zeros((50, 50), dtype=bool)) == (0.0, 0.0))
+
+    # 自检逻辑必须**同时**用两个维度（防有人退回一维）
+    check("自检同时用 blob 与 aspect 两个条件",
+          "blob >= GLYPH_PIXELS" in code and "aspect >= GLYPH_ASPECT" in code,
+          "找不到 `blob >= GLYPH_PIXELS` 与 `aspect >= GLYPH_ASPECT` 同时出现")
+
     print()
     if fails:
         print(f"掩膜闸门：{len(fails)} 项 FAIL → {fails}")
