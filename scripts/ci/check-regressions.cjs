@@ -511,5 +511,54 @@ checker.check("generate.js 里 pending.length = 0 出现在 await send.click() �
   );
 });
 
+checker.step("⑮ 批量必须复用同一个浏览器窗口（⛔ 每张图 launch 一次 = 反复开关窗口，疑触发风控）");
+checker.check("generate.js 只有一处 launchPersistentContext，lib/session.js 复用 launchContext/page", () => {
+  const gen = read("lib/generate.js");
+  const hits = (gen.match(/chromium\.launchPersistentContext\s*\(/g) || []).length;
+  assert.equal(
+    hits,
+    1,
+    `generate.js 里 chromium.launchPersistentContext 出现 ${hits} 次（应为 1 次，只在 launchContext 里）——` +
+      "多于 1 处说明又有人各自开浏览器：批量会变成「每张图开关一次窗口」（2026-10-22 主号冻结复盘第一嫌疑）",
+  );
+  for (const fn of ["launchContext", "openPage", "generateOnPage"]) {
+    assert.ok(
+      new RegExp(`export\\s+async\\s+function\\s+${fn}\\s*\\(`).test(gen),
+      `generate.js 没有导出 ${fn}() —— 复用窗口的三件套缺一件`,
+    );
+  }
+  const sess = read("lib/session.js");
+  assert.ok(/from\s+["']\.\/generate\.js["']/.test(sess), "lib/session.js 不是从 ./generate.js 引入复用原语");
+  for (const fn of ["launchContext", "openPage", "generateOnPage"]) {
+    assert.ok(new RegExp(`\\b${fn}\\b`).test(sess), `lib/session.js 没用上 ${fn} —— 会话层不该自己开浏览器`);
+  }
+  assert.ok(
+    !/launchPersistentContext/.test(sess),
+    "lib/session.js 里出现了 launchPersistentContext —— 会话层不许自己开浏览器（否则又是一张图一个窗口）",
+  );
+  assert.ok(
+    /export\s+async\s+function\s+openSession\s*\(/.test(sess),
+    "lib/session.js 没有 export openSession() —— 批量入口丢了",
+  );
+});
+
+checker.step("⑯ page 的 response 监听必须成对 off（复用同一 page 时，否则每张图积一层）");
+checker.check('generate.js 里 page.on("response" …) 与 page.off("response" …) 成对', () => {
+  const gen = read("lib/generate.js");
+  const on = (gen.match(/page\.on\(\s*["']response["']/g) || []).length;
+  const off = (gen.match(/page\.off\(\s*["']response["']/g) || []).length;
+  assert.equal(on, 1, `generate.js 里 page.on("response") 出现 ${on} 次（应为 1 次，应挂在 onResponse 变量上）`);
+  assert.equal(
+    off,
+    1,
+    `generate.js 里 page.off("response") 出现 ${off} 次（应为 1 次）——` +
+      "缺 off ⇒ 批量复用同一 page 时监听越积越多（跨图串味/内存涨）",
+  );
+  assert.ok(
+    /finally\s*\{[\s\S]{0,400}page\.off\(\s*["']response["']/.test(gen),
+    'page.off("response") 不在 finally 里 —— 出图抛错时监听照样残留',
+  );
+});
+
 console.log(`${C.dim("扫描文件：")}${SCAN_JS.join(", ")}`);
 process.exit(checker.finish());

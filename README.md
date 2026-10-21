@@ -373,6 +373,7 @@ IOPaint 的另两个主流模型都试通了，但都不比 `lama + tight`（自
   - ⛔ 曾尝试自研上传（`genUploadInfo` + HMAC-SHA1 + COS PUT + `TIMImageElem`）⇒ **失败**：元宝不认 `X-Token`/`X-ID`（那是 hermes-agent 的旧协议），实际要 `x-hy92`/`x-hy93`/`x-id` + 前端侧签名，逆无可逆。
   - ✅ **v0.6.2 修复：上传时不再弹系统「打开」文件框**（2026-10-21）。前端那一步是真实的 `input.click()`，浏览器会弹 Windows 原生文件对话框；patchright 只有在存在 `filechooser` 监听器时才下发 `Page.setInterceptFileChooserDialog`（见 `patchright-core/lib/coreBundle.js` 的 `fileChooserIntercepted()`），没监听 ⇒ 不拦截 ⇒ 系统框弹出后无人关闭，会一直压在桌面上。现改为**先注册 `filechooser` 监听、再点「上传图片」、用 `chooser.setFiles()` 灌文件**（不再用 `locator.setInputFiles`，那是 CDP 直灌、关不掉已弹出的原生框）。实测对照：旧写法会弹 `title='打开'` 的系统框，新写法全程无系统框。
 - **临时会话轮次上限会自动重试**（2026-10-20）：元宝的 `chatMode=temp` 临时对话累积轮次后会返回 `code 21003`「当前对话已达到对话次数上限」。插件捕获该错误后**自动重新载入临时会话**（实测重新加载 `chatMode=temp` 会拿到新的 `conversationId` 且仍是临时对话，不落历史）并重发一次（参考图会重新上传）。连续两次都撞上限才报错。
+- **批量出图请用 `lib/session.js`（v0.10.7）**：一次 `launchPersistentContext`、同一个窗口连续出图——`openSession({ profileDir })` 拿到会话后反复 `session.generate({...})`，或用 `generateMany(session, jobs, { gapMs })` 自带间隔抖动与「连续失败即刹车」。2026-10-22 主号在 3 小时内批量出 45 张图生图后被元宝冻结（页面提示「账号已冻结 · 申诉处理中」），复盘第一嫌疑是**每张图都开关一次浏览器窗口**（旧实现每调一次 `generate()` 就 launch 一次、close 一次）⇒ 批量务必复用会话，并把节奏控制在每天 ≤40 张。
 - **画风预设只接受 `image2image` 类模板**（v0.8.0）：`text2image` 类（电商海报等成品场景模板）当画风用会和你自己的画面描述打架，插件会直接报错并提示换模板。
 - **画风模板库是官方快照**：缓存 `~/.dsh/yuanbao-t2i-templates.json`，一周刷新一次；元宝改版后可能要手动删缓存重拉。首次拉取需要联网（走元宝自己的登录态）。
 - LaMa 修复在白色背景 + 细纸纹图上仍可能留下轻微平滑痕——这也是「默认不去水印」的原因。

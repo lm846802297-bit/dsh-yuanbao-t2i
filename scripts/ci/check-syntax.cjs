@@ -22,6 +22,7 @@ const REPO = resolve(__dirname, "..", "..");
 const REQUIRED_JS = [
   "lib/plugin.js",
   "lib/generate.js",
+  "lib/session.js",
   "lib/settings.js",
   "lib/route.js",
   "lib/templates.js",
